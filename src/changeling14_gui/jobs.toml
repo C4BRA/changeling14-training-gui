@@ -1,0 +1,72 @@
+# Changeling14 training GUI: job buttons.
+#
+# Copy this file to ~/.changeling14/gui.toml to customise it.
+# Each [[jobs]] entry becomes a button. The command is run as a separate
+# program; the app only watches its run folder.
+#
+# Placeholders in commands:
+#   {python}   the Python running this app
+#   {run_dir}  the new run folder for this job (also in $C14_RUN_DIR)
+#   {<name>}   any entry under [paths], e.g. {inbox} or {wizden}
+#
+# The pipeline steps run "{python} -m changeling14_vision", so install
+# changeling14-vision into the same Python environment as this app.
+#
+# heavy = true jobs share one slot: only one runs at a time, the rest queue.
+# A job with an empty command shows as a disabled button.
+
+[paths]
+runs = "~/Desktop/SS13-14/changeling14-runs"
+inbox = "~/Desktop/SS13-14/replay-inbox"
+wizden = "~/Desktop/SS13-14/wizden-ss14"
+sprite_dataset = "~/Desktop/SS13-14/ss14-sprite-dataset"
+
+[[jobs]]
+id = "demo"
+label = "Demo training run"
+description = "Writes a fake run (progress, log, watch set) to try the app."
+heavy = true
+command = ["{python}", "-m", "changeling14_gui.demo", "--run-dir", "{run_dir}"]
+
+[[jobs]]
+id = "sprites"
+label = "Build sprite catalogue"
+description = "M0: cut every Wizden sprite, link sprites to entities, write credits and a report."
+heavy = true
+command = ["{python}", "-m", "changeling14_vision", "--run-dir", "{run_dir}",
+           "sprites", "--repo", "{wizden}", "--out", "{sprite_dataset}"]
+
+[[jobs]]
+id = "import-replays"
+label = "Import replays from inbox"
+description = "Scan, render and label each replay in the inbox, then delete it."
+heavy = true
+command = []
+
+[[jobs]]
+id = "build-dataset"
+label = "Build dataset"
+description = "Sprite catalogue, concept map and replay frames into one dataset."
+heavy = true
+command = []
+
+[[jobs]]
+id = "train"
+label = "Train"
+description = "Train or resume from the latest checkpoint."
+heavy = true
+command = []
+
+[[jobs]]
+id = "benchmark"
+label = "Benchmark"
+description = "Score a checkpoint on the frozen test set."
+heavy = true
+command = []
+
+[[jobs]]
+id = "export"
+label = "Export"
+description = "Export a checkpoint to MLX, ONNX and Core ML."
+heavy = true
+command = []
