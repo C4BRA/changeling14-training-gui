@@ -302,3 +302,39 @@ def test_values_and_extra_args(tmp_path):
     assert config.expand_command(job, cfg, tmp_path) == ["train", "--out", "/m/a", "--size", "tiny"]
     assert config.expand_command(job, cfg, tmp_path, {"model_dir": Path("/m/b"), "size": "small"},
                                  ["--steps", "5"]) == ["train", "--out", "/m/b", "--size", "small", "--steps", "5"]
+
+
+def test_watchset_cards(tmp_path):
+    from changeling14_gui import cards
+
+    def checkpoint(name, step, ranks, meta=None):
+        folder = tmp_path / "run" / "watchset" / name
+        folder.mkdir(parents=True)
+        rows = []
+        for i, rank in enumerate(ranks):
+            Canvas(4, 4, (0, 0, 0)).save(folder / f"{i:02d}.png")
+            rows.append({"image": f"{i:02d}.png", "kind": "name", "name": "security hud",
+                         "names": ["security hud"], "group": "Clothing/Eyes", "rank": rank,
+                         "guesses": [{"name": "paperwork", "score": 0.2}, {"name": "security hud", "score": 0.1}]})
+        write_json_atomic(folder / "predictions.json", {"version": 1, "items": rows})
+        write_json_atomic(folder / "meta.json", {"step": step, **(meta or {})})
+
+    checkpoint("step-0000000", 0, [None, None, 2])
+    checkpoint("step-0001000", 1000, [1, 2, None], {"unseen_text_top1": 0.02, "unseen_text_top5": 0.1})
+    (tmp_path / "run" / "run.json").write_text("{}")
+    old = tmp_path / "run" / "watchset" / "old"          # captioned PNGs, no predictions
+    old.mkdir()
+    Canvas(4, 4, (0, 0, 0)).save(old / "x.png")
+    cps = RunFolder(tmp_path / "run").checkpoints()
+    first, second, legacy = cps[0], cps[1], cps[2]
+
+    assert legacy.rows == [] and cards.summary(legacy) == ""
+    assert cards.card(second.rows[0]).verdict == "✓ Got it"
+    assert cards.card(second.rows[1]).verdict == "≈ Close: 2nd guess"
+    bad = cards.card(second.rows[2])
+    assert bad.title == "Security hud" and bad.verdict == "✗ Thought it was: Paperwork" and bad.colour == cards.BAD
+    assert cards.summary(second, first) == ("These are 3 sprites the model has never trained on. It named 1 right "
+                                            "and had 1 more in its top 5, up from 0 and 1 at the last checkpoint.")
+    assert cards.summary(first).endswith("had 1 more in its top 5.")
+    assert cards.summary(second, second) .endswith("no change since the last checkpoint.")
+    assert cards.trend(cps) == [(0, 0.0, 1 / 3), (1000, 0.02, 0.1)]

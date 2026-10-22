@@ -9,13 +9,14 @@ from __future__ import annotations
 import json
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 RUN_FILE = "run.json"
 STATUS_FILE = "status.json"
 CONSOLE_FILE = "console.log"
 WATCHSET_DIR = "watchset"
+PREDICTIONS_FILE = "predictions.json"
 
 
 def _read_json(path: Path) -> dict | None:
@@ -68,6 +69,17 @@ class Checkpoint:
     path: Path
     step: int | None
     images: tuple[Path, ...]
+    meta: dict = field(default_factory=dict)
+    predictions: dict | None = None   # predictions.json, when the step writes one
+
+    @property
+    def rows(self) -> list[dict]:
+        """predictions.json items whose picture is here, in picture order."""
+        if not self.predictions:
+            return []
+        names = {p.name for p in self.images}
+        items = self.predictions.get("items")
+        return [r for r in items if isinstance(r, dict) and r.get("image") in names] if isinstance(items, list) else []
 
 
 class RunFolder:
@@ -132,7 +144,8 @@ class RunFolder:
                 continue
             meta = _read_json(entry / "meta.json") or {}
             step = meta.get("step")
-            found.append(Checkpoint(entry.name, entry, int(step) if isinstance(step, int) else None, images))
+            found.append(Checkpoint(entry.name, entry, int(step) if isinstance(step, int) else None, images,
+                                    meta, _read_json(entry / PREDICTIONS_FILE)))
         # Order by training step when known, then by folder name.
         found.sort(key=lambda c: (c.step is None, c.step or 0, c.name))
         return found

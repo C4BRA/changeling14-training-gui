@@ -19,6 +19,7 @@ A step finds its run folder in the `C14_RUN_DIR` environment variable, or
   watchset/       written by the step: images to look at, grouped by checkpoint
     <checkpoint>/
       meta.json   optional: {"step": 1200, "time": 1792680000.0, ...}
+      predictions.json  optional: what the model made of each picture
       *.png
   ...             anything else the step wants (metrics, reports)
 ```
@@ -45,8 +46,25 @@ from `step / total` and the time since the run started.
 One subfolder per checkpoint. The app sorts them by `meta.json` `step` when
 present, otherwise by folder name, and shows them on a timeline slider.
 Images are drawn at native pixel size and only ever scaled up by whole
-numbers, so pixel art stays crisp. Training writes the fixed watch-set frames
-with predictions drawn on; other steps may use it for a sample gallery.
+numbers, so pixel art stays crisp. Training writes the fixed watch-set frames;
+other steps may use it for a sample gallery.
+
+With `predictions.json` the app draws each picture as a card: the real name
+and a verdict (got it, close, or what the model thought it was), with the
+top guesses on click, plus a one-line summary against the previous
+checkpoint and a trend line. Without it, the pictures are shown as they are
+(older runs have the predictions drawn into the images).
+
+    {"version": 1, "top": 5, "items": [
+      {"image": "00-x.png", "kind": "name",        "name" or, for kind "group", the folder group
+       "name": "security hud", "names": ["security hud"],   every name that counts as right
+       "guesses": [{"name": "paperwork", "score": 0.21}, ...],   best first, distinct names
+       "rank": 2,                                  1-5 if a right name is among the guesses, else null
+       "group": "Clothing/Eyes", "sheet": "...", "state": "..."}]}
+
+`meta.json` may also carry `unseen_text_top1` / `unseen_text_top5` (or the
+`unseen_category_*` pair), scored over every held-out sprite; the trend line
+uses them when present.
 
 ## run.json
 

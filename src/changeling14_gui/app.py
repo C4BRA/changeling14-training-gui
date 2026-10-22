@@ -10,10 +10,11 @@ import subprocess
 import sys
 import time
 import tkinter as tk
+import tkinter.font as tkfont
 from pathlib import Path
 from tkinter import messagebox, ttk
 
-from . import sysinfo
+from . import cards, sysinfo
 from .config import Config, JobSpec
 from .forms import FORMS
 from .runfolder import Checkpoint, RunFolder, list_runs
@@ -48,7 +49,14 @@ def open_in_file_browser(path: Path) -> None:
 
 
 class WatchSetView(ttk.Frame):
-    """Grid of watch-set frames for one checkpoint, with a timeline slider."""
+    """Grid of watch-set frames for one checkpoint, with a timeline slider.
+
+    A checkpoint with predictions.json is drawn as cards (real name and a
+    plain verdict, click for the model's top guesses) under a one-sentence
+    summary and a trend line. Older checkpoints are shown as their pictures.
+    """
+
+    CARD_TEXT_H = 38
 
     def __init__(self, master):
         super().__init__(master, padding=6)
@@ -66,11 +74,18 @@ class WatchSetView(ttk.Frame):
         self.label = ttk.Label(controls, text="no watch set yet", width=28)
         self.label.pack(side="left")
         ttk.Label(controls, text="Zoom").pack(side="left", padx=(12, 2))
-        self.zoom = tk.IntVar(value=2)
+        self.zoom = tk.IntVar(value=1)
         ttk.Spinbox(controls, from_=1, to=4, width=3, textvariable=self.zoom,
                     command=self.redraw, state="readonly").pack(side="left")
         self.follow = tk.BooleanVar(value=True)
         ttk.Checkbutton(controls, text="Follow latest", variable=self.follow).pack(side="left", padx=8)
+
+        head = ttk.Frame(self)
+        head.pack(fill="x", pady=(6, 0))
+        self.summary = ttk.Label(head, text="", wraplength=560, justify="left")
+        self.summary.pack(side="left", fill="x", expand=True, anchor="w")
+        self.trend = tk.Canvas(head, width=240, height=54, highlightthickness=0, background="#1e2025")
+        self.trend.bind("<Configure>", lambda _e: self._draw_trend())
 
         body = ttk.Frame(self)
         body.pack(fill="both", expand=True, pady=(6, 0))
@@ -81,6 +96,8 @@ class WatchSetView(ttk.Frame):
         self.canvas.pack(side="left", fill="both", expand=True)
         self.canvas.bind("<Configure>", self._on_resize)
         self.canvas.bind("<MouseWheel>", lambda e: self.canvas.yview_scroll(int(-e.delta / 120) or -1 * (e.delta > 0) or 1, "units"))
+        self.name_font = tkfont.Font(family="Helvetica", size=12, weight="bold")
+        self.verdict_font = tkfont.Font(family="Helvetica", size=11)
 
     def set_checkpoints(self, checkpoints: list[Checkpoint]) -> None:
         old_count = len(self.checkpoints)
@@ -102,19 +119,30 @@ class WatchSetView(ttk.Frame):
             self.images = []
             self.shown = None
             self.label.configure(text="no watch set yet")
+            self.summary.configure(text="")
+            self.trend.pack_forget()
             return
         index = min(int(self.slider.get()), len(self.checkpoints) - 1)
         cp = self.checkpoints[index]
         zoom = max(1, min(4, int(self.zoom.get() or 1)))
         width = self.canvas.winfo_width()
-        key = (cp.path, cp.images, zoom, width)
-        step = f"step {cp.step}" if cp.step is not None else cp.name
+        rows = cp.rows
+        key = (cp.path, cp.images, len(rows), zoom, width, len(self.checkpoints))
+        step = f"step {cp.step:,}" if cp.step is not None else cp.name
         self.label.configure(text=f"{index + 1} / {len(self.checkpoints)} · {step}")
         if key == self.shown and not force:
             return
         self.shown = key
+        previous = next((c for c in reversed(self.checkpoints[:index]) if c.rows), None)
+        self.summary.configure(text=cards.summary(cp, previous))
+        if len(cards.trend(self.checkpoints)) >= 2:
+            self.trend.pack(side="right", padx=(8, 0))
+            self._draw_trend(cp.step)
+        else:
+            self.trend.pack_forget()
 
         self.canvas.delete("all")
+        by_image = {r["image"]: r for r in rows}
         images = []
         for path in cp.images:
             try:
@@ -122,19 +150,104 @@ class WatchSetView(ttk.Frame):
             except tk.TclError:
                 continue  # half-written file; it will be there next poll
             # Integer zoom is nearest-neighbour, so pixel art stays crisp.
-            images.append(img.zoom(zoom) if zoom > 1 else img)
-        self.images = images
+            images.append((img.zoom(zoom) if zoom > 1 else img, by_image.get(path.name)))
+        self.images = [i for i, _ in images]
         if not images:
             return
-        pad = 8
-        cell_w = max(i.width() for i in images) + pad
-        cell_h = max(i.height() for i in images) + pad
+        pad = 10
+        text_h = self.CARD_TEXT_H if rows else 0
+        cell_w = max(i.width() for i, _ in images) + pad
+        cell_h = max(i.height() for i, _ in images) + text_h + pad
         cols = max(1, (max(width, cell_w) - pad) // cell_w)
-        for n, img in enumerate(images):
+        for n, (img, row) in enumerate(images):
             r, c = divmod(n, cols)
-            self.canvas.create_image(pad + c * cell_w, pad + r * cell_h, image=img, anchor="nw")
-        rows = (len(images) + cols - 1) // cols
-        self.canvas.configure(scrollregion=(0, 0, cols * cell_w + pad, rows * cell_h + pad))
+            x, y = pad + c * cell_w, pad + r * cell_h
+            tag = f"card{n}"
+            self.canvas.create_image(x, y, image=img, anchor="nw", tags=tag)
+            if row is None:
+                continue
+            info = cards.card(row)
+            w = img.width()
+            self.canvas.create_rectangle(x - 2, y - 2, x + w + 1, y + img.height() + 1,
+                                         outline=info.colour, width=3, tags=tag)
+            self.canvas.create_text(x, y + img.height() + 6, anchor="nw", fill="#e6e6e6", font=self.name_font,
+                                    text=self._fit(info.title, self.name_font, w), tags=tag)
+            self.canvas.create_text(x, y + img.height() + 22, anchor="nw", fill=info.colour,
+                                    font=self.verdict_font, text=self._fit(info.verdict, self.verdict_font, w),
+                                    tags=tag)
+            self.canvas.tag_bind(tag, "<Button-1>", lambda _e, i=info: self._details(i))
+            self.canvas.tag_bind(tag, "<Enter>", lambda _e: self.canvas.configure(cursor="hand2"))
+            self.canvas.tag_bind(tag, "<Leave>", lambda _e: self.canvas.configure(cursor=""))
+        rows_n = (len(images) + cols - 1) // cols
+        self.canvas.configure(scrollregion=(0, 0, cols * cell_w + pad, rows_n * cell_h + pad))
+
+    @staticmethod
+    def _fit(text: str, font: tkfont.Font, width: int) -> str:
+        if font.measure(text) <= width:
+            return text
+        while text and font.measure(text + "…") > width:
+            text = text[:-1]
+        return text + "…"
+
+    def _draw_trend(self, current_step: int | None = None) -> None:
+        points = cards.trend(self.checkpoints)
+        c = self.trend
+        c.delete("all")
+        if len(points) < 2:
+            return
+        w, h = int(c.winfo_width()) or 240, int(c.winfo_height()) or 54
+        top_pad, bottom = 14, h - 4
+        steps = [p[0] for p in points]
+        peak = max(max(p[2] for p in points), 0.01)
+        lo, hi = min(steps), max(steps) or 1
+
+        def xy(step, value):
+            return (4 + (w - 8) * (step - lo) / max(1, hi - lo), bottom - (bottom - top_pad) * value / peak)
+
+        for series, colour in ((2, cards.CLOSE), (1, cards.GOOD)):
+            coords = [v for p in points for v in xy(p[0], p[series])]
+            c.create_line(*coords, fill=colour, width=2)
+        if current_step is not None and lo <= current_step <= hi:
+            x = xy(current_step, 0)[0]
+            c.create_line(x, top_pad, x, bottom, fill="#777", dash=(2, 2))
+        last = points[-1]
+        c.create_text(4, 1, anchor="nw", fill="#bbb", font=("Helvetica", 10),
+                      text=f"All unseen sprites: right {last[1]:.1%} · top 5 {last[2]:.1%}")
+
+    def _details(self, info: cards.Card) -> None:
+        row = info.row
+        top = tk.Toplevel(self)
+        top.title(info.title)
+        top.transient(self.winfo_toplevel())
+        body = ttk.Frame(top, padding=12)
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text=info.title, font=self.name_font).grid(row=0, column=0, columnspan=3, sticky="w")
+        ttk.Label(body, text=info.verdict, foreground=info.colour).grid(row=1, column=0, columnspan=3, sticky="w")
+        names = row.get("names") or []
+        if len(names) > 1:
+            also = ", ".join(cards.display_name(n) for n in names[1:4]) + ("…" if len(names) > 4 else "")
+            ttk.Label(body, text=f"Also counts as right: {also}", foreground="#666",
+                      wraplength=360).grid(row=2, column=0, columnspan=3, sticky="w")
+        ttk.Label(body, text="The model's top guesses").grid(row=3, column=0, columnspan=3, sticky="w", pady=(10, 4))
+        wanted = {n.lower() for n in names}
+        guesses = row.get("guesses") or []
+        best = max([g.get("score", 0) for g in guesses] + [1e-9])
+        for k, g in enumerate(guesses):
+            right = str(g.get("name", "")).lower() in wanted
+            ttk.Label(body, text=f"{k + 1}.").grid(row=4 + k, column=0, sticky="w")
+            ttk.Label(body, text=cards.display_name(g.get("name")),
+                      foreground=cards.GOOD if right else "").grid(row=4 + k, column=1, sticky="w", padx=6)
+            bar = tk.Canvas(body, width=120, height=10, highlightthickness=0)
+            bar.grid(row=4 + k, column=2, sticky="w")
+            bar.create_rectangle(0, 0, 120 * g.get("score", 0) / best, 10,
+                                 fill=cards.GOOD if right else "#8a8f99", width=0)
+        detail = [f"Kind: {row.get('group', '?')}", f"Sprite: {row.get('sheet', '?')} / {row.get('state', '?')}"]
+        if guesses:
+            detail.append("Match scores: " + ", ".join(f"{g.get('score', 0):.2f}" for g in guesses))
+        ttk.Label(body, text="\n".join(detail), foreground="#666", justify="left").grid(
+            row=10, column=0, columnspan=3, sticky="w", pady=(10, 0))
+        ttk.Button(body, text="Close", command=top.destroy).grid(row=11, column=2, sticky="e", pady=(10, 0))
+        top.bind("<Escape>", lambda _e: top.destroy())
 
 
 class App:
