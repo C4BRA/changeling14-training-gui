@@ -50,7 +50,8 @@ The built-in `jobs.toml` has:
 | Import replays, Build dataset | greyed out until those steps exist |
 
 Train, Benchmark and Export need the pipeline's extras:
-`pip install -e "$HOME/Desktop/SS13-14/changeling14-vision[train,export]"`. Models go to
+`pip install -e "$HOME/Desktop/SS13-14/changeling14-vision[train,text,export]"`
+(`text` adds sentence-transformers for text matching; MiniLM, about 90 MB, downloads once). Models go to
 `~/Desktop/SS13-14/changeling14-models/`.
 
 To change paths or add jobs, copy `src/changeling14_gui/jobs.toml` to
