@@ -20,6 +20,7 @@ runs = "~/Desktop/SS13-14/changeling14-runs"
 inbox = "~/Desktop/SS13-14/replay-inbox"
 wizden = "~/Desktop/SS13-14/wizden-ss14"
 sprite_dataset = "~/Desktop/SS13-14/ss14-sprite-dataset"
+models = "~/Desktop/SS13-14/changeling14-models"
 
 [[jobs]]
 id = "demo"
@@ -53,20 +54,23 @@ command = []
 [[jobs]]
 id = "train"
 label = "Train"
-description = "Train or resume from the latest checkpoint."
+description = "Sprite pretraining (Tiny); resumes from the latest checkpoint, saves on stop."
 heavy = true
-command = []
+command = ["{python}", "-m", "changeling14_vision", "--run-dir", "{run_dir}", "train",
+           "--data", "{sprite_dataset}", "--out", "{models}/sprite-pretrain-tiny", "--size", "tiny"]
 
 [[jobs]]
 id = "benchmark"
 label = "Benchmark"
 description = "Score a checkpoint on the frozen test set."
 heavy = true
-command = []
+command = ["{python}", "-m", "changeling14_vision", "--run-dir", "{run_dir}", "benchmark",
+           "--data", "{sprite_dataset}", "--out", "{models}/sprite-pretrain-tiny", "--size", "tiny"]
 
 [[jobs]]
 id = "export"
 label = "Export"
 description = "Export a checkpoint to MLX, ONNX and Core ML."
 heavy = true
-command = []
+command = ["{python}", "-m", "changeling14_vision", "--run-dir", "{run_dir}", "export",
+           "--out", "{models}/sprite-pretrain-tiny", "--size", "tiny"]

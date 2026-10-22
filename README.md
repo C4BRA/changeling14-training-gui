@@ -44,7 +44,14 @@ The built-in `jobs.toml` has:
 |---|---|
 | Demo training run | a fake 60-second run that writes progress, a log and a watch set, to try the app |
 | Build sprite catalogue | M0: `changeling14-vision sprites` on `~/Desktop/SS13-14/wizden-ss14` |
-| Import replays, Build dataset, Train, Benchmark, Export | greyed out until those steps exist |
+| Train | sprite pretraining of the Tiny encoder; resumes from `latest.pt`, saves a checkpoint when stopped |
+| Benchmark | scores the checkpoint; writes `benchmark.md`, per-category accuracy and a mistakes gallery |
+| Export | exports the checkpoint |
+| Import replays, Build dataset | greyed out until those steps exist |
+
+Train, Benchmark and Export need the pipeline's extras:
+`pip install -e "$HOME/Desktop/SS13-14/changeling14-vision[train,export]"`. Models go to
+`~/Desktop/SS13-14/changeling14-models/`.
 
 To change paths or add jobs, copy `src/changeling14_gui/jobs.toml` to
 `~/.changeling14/gui.toml` and edit it, or pass `--config FILE`.

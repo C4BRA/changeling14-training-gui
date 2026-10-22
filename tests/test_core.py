@@ -62,7 +62,8 @@ def test_builtin_config_loads():
         (Path(config.__file__).parent / "jobs.toml").read_text()))
     ids = [j.id for j in cfg.jobs]
     assert ids[:2] == ["demo", "sprites"]
-    assert cfg.job("demo").enabled and not cfg.job("train").enabled
+    assert cfg.job("demo").enabled and cfg.job("train").enabled
+    assert not cfg.job("import-replays").enabled
 
 
 def test_placeholders(cfg, tmp_path):
