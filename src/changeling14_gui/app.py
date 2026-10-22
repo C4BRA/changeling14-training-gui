@@ -11,9 +11,9 @@ import sys
 import time
 import tkinter as tk
 from pathlib import Path
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
-from . import sysinfo
+from . import codebases, sysinfo
 from .config import Config, JobSpec
 from .runfolder import Checkpoint, RunFolder, list_runs
 from .runner import Runner
@@ -136,6 +136,142 @@ class WatchSetView(ttk.Frame):
         self.canvas.configure(scrollregion=(0, 0, cols * cell_w + pad, rows * cell_h + pad))
 
 
+class SpriteCatalogueWindow:
+    """Pick the codebase and output folder for a sprite catalogue build.
+
+    After wait() returns, `result` is the {wizden, sprite_dataset}
+    overrides for the run, or None if cancelled.
+    """
+
+    def __init__(self, parent: tk.Tk, cfg: Config):
+        self.cfg = cfg
+        self.result: dict[str, Path] | None = None
+        self.checkouts = codebases.find_checkouts(cfg)
+        self.repo: Path | None = None
+        self.out_touched = False  # the user typed or browsed an output folder
+
+        top = self.top = tk.Toplevel(parent)
+        top.title("Build sprite catalogue")
+        top.transient(parent)
+        top.resizable(True, False)
+        top.protocol("WM_DELETE_WINDOW", self.cancel)
+        body = ttk.Frame(top, padding=12)
+        body.pack(fill="both", expand=True)
+        body.columnconfigure(0, weight=1)
+
+        ttk.Label(body, text="Codebase to build from").grid(row=0, column=0, columnspan=2, sticky="w")
+        self.repo_list = tk.Listbox(body, height=min(8, max(3, len(self.checkouts))), width=64,
+                                    activestyle="none", exportselection=False)
+        self.repo_list.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        for path in self.checkouts:
+            self.repo_list.insert("end", f"{path.name}    {path}")
+        if not self.checkouts:
+            self.repo_list.insert("end", "No SS14 checkouts found; choose a folder")
+        self.repo_list.bind("<<ListboxSelect>>", self.on_list_select)
+        self.repo_list.bind("<Double-Button-1>", lambda _e: self.build())
+        ttk.Button(body, text="Choose folder…", command=self.choose_repo).grid(row=1, column=1, sticky="n",
+                                                                              padx=(8, 0), pady=(4, 0))
+        self.repo_label = ttk.Label(body, text="", foreground="#666")
+        self.repo_label.grid(row=2, column=0, columnspan=2, sticky="w", pady=(2, 10))
+
+        ttk.Label(body, text="Output folder").grid(row=3, column=0, columnspan=2, sticky="w")
+        self.out_var = tk.StringVar()
+        out_entry = ttk.Entry(body, textvariable=self.out_var)
+        out_entry.grid(row=4, column=0, sticky="ew", pady=(4, 0))
+        out_entry.bind("<Key>", lambda _e: setattr(self, "out_touched", True))
+        self.out_var.trace_add("write", lambda *_a: self.refresh())
+        ttk.Button(body, text="Browse…", command=self.choose_out).grid(row=4, column=1, padx=(8, 0), pady=(4, 0))
+
+        self.message = ttk.Label(body, text="", wraplength=520, justify="left")
+        self.message.grid(row=5, column=0, columnspan=2, sticky="w", pady=(10, 0))
+        self.note = ttk.Label(body, text="", wraplength=520, justify="left", foreground="#666")
+        self.note.grid(row=6, column=0, columnspan=2, sticky="w", pady=(4, 0))
+
+        buttons = ttk.Frame(body)
+        buttons.grid(row=7, column=0, columnspan=2, sticky="e", pady=(12, 0))
+        ttk.Button(buttons, text="Cancel", command=self.cancel).pack(side="left")
+        self.build_btn = ttk.Button(buttons, text="Build", command=self.build, default="active")
+        self.build_btn.pack(side="left", padx=(8, 0))
+        top.bind("<Return>", lambda _e: self.build())
+        top.bind("<Escape>", lambda _e: self.cancel())
+
+        if self.checkouts:
+            self.repo_list.selection_set(0)
+            self.set_repo(self.checkouts[0])
+        else:
+            self.refresh()
+
+    def wait(self) -> dict[str, Path] | None:
+        self.top.grab_set()
+        self.top.focus_set()
+        self.top.wait_window()
+        return self.result
+
+    def on_list_select(self, _event=None) -> None:
+        sel = self.repo_list.curselection()
+        if sel and sel[0] < len(self.checkouts):
+            self.set_repo(self.checkouts[sel[0]])
+
+    def choose_repo(self) -> None:
+        start = self.repo or (self.checkouts[0].parent if self.checkouts else Path.home())
+        picked = filedialog.askdirectory(parent=self.top, title="Choose an SS14 codebase", initialdir=str(start),
+                                         mustexist=True)
+        if not picked:
+            return
+        path = Path(picked)
+        # A folder inside a checkout (Resources, Resources/Textures, ...) means that checkout.
+        root = codebases.checkout_root(path) or path
+        self.repo_list.selection_clear(0, "end")
+        if root in self.checkouts:
+            self.repo_list.selection_set(self.checkouts.index(root))
+        self.set_repo(root)
+
+    def choose_out(self) -> None:
+        current = Path(self.out_var.get()).expanduser() if self.out_var.get().strip() else None
+        start = current.parent if current else self.cfg.runs.parent
+        picked = filedialog.askdirectory(parent=self.top, title="Choose where the catalogue goes",
+                                         initialdir=str(start if start.is_dir() else Path.home()))
+        if picked:
+            self.out_touched = True
+            self.out_var.set(picked)
+
+    def set_repo(self, repo: Path) -> None:
+        self.repo = repo
+        self.repo_label.configure(text=str(repo))
+        if not self.out_touched:
+            self.out_var.set(str(codebases.default_out(repo, self.cfg)))
+        self.refresh()
+
+    def _out(self) -> Path | None:
+        text = self.out_var.get().strip()
+        return Path(text).expanduser() if text else None
+
+    def refresh(self) -> None:
+        check = codebases.check_choice(self.repo, self._out())
+        self.message.configure(text=check.message, foreground="" if check.ok else "#b00020")
+        self.build_btn.state(["!disabled"] if check.ok else ["disabled"])
+        out, dataset = self._out(), self.cfg.paths.get("sprite_dataset")
+        if check.ok and out and dataset and out.resolve() != dataset.resolve():
+            self.note.configure(text=f"Train and Benchmark read {dataset}. To train on this catalogue, "
+                                     "point sprite_dataset at it in ~/.changeling14/gui.toml.")
+        else:
+            self.note.configure(text="")
+
+    def build(self) -> None:
+        out = self._out()
+        if not codebases.check_choice(self.repo, out).ok:
+            return
+        self.result = {"wizden": self.repo, "sprite_dataset": out.resolve()}
+        self.top.destroy()
+
+    def cancel(self) -> None:
+        self.result = None
+        self.top.destroy()
+
+
+FORMS = {"sprites": SpriteCatalogueWindow}
+
+
 class App:
     def __init__(self, root: tk.Tk, cfg: Config):
         self.root = root
@@ -234,8 +370,18 @@ class App:
     # Actions -------------------------------------------------------------
 
     def start_job(self, job: JobSpec) -> None:
+        overrides = None
+        if job.form:
+            form = FORMS.get(job.form)
+            if form is None:
+                messagebox.showerror("Could not start job", f"{job.label}: unknown form {job.form!r}",
+                                     parent=self.root)
+                return
+            overrides = form(self.root, self.cfg).wait()
+            if overrides is None:
+                return
         try:
-            run = self.runner.submit(job)
+            run = self.runner.submit(job, overrides)
         except (OSError, ValueError) as exc:
             messagebox.showerror("Could not start job", str(exc), parent=self.root)
             return

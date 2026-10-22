@@ -67,7 +67,7 @@ class Runner:
 
     # Queue ---------------------------------------------------------------
 
-    def submit(self, job: JobSpec) -> Run:
+    def submit(self, job: JobSpec, overrides: dict[str, Path] | None = None) -> Run:
         if not job.enabled:
             raise ValueError(f"job {job.id!r} has no command yet")
         self.cfg.runs.mkdir(parents=True, exist_ok=True)
@@ -76,7 +76,7 @@ class Runner:
             "job": job.id,
             "label": job.label,
             "heavy": job.heavy,
-            "command": expand_command(job, self.cfg, run_dir),
+            "command": expand_command(job, self.cfg, run_dir, overrides),
             "state": "queued",
             "queued_at": time.time(),
         }

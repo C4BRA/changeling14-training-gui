@@ -19,6 +19,7 @@ class JobSpec:
     command: tuple[str, ...]
     heavy: bool = True
     description: str = ""
+    form: str = ""  # a window to fill in before the job starts, e.g. "sprites"
 
     @property
     def enabled(self) -> bool:
@@ -60,6 +61,7 @@ def parse(data: dict, source: str = "<builtin>") -> Config:
                 command=tuple(str(part) for part in raw.get("command", [])),
                 heavy=bool(raw.get("heavy", True)),
                 description=str(raw.get("description", "")),
+                form=str(raw.get("form", "")),
             )
         )
     all_paths = {
@@ -95,7 +97,10 @@ def load(explicit: str | None = None) -> Config:
         return parse(tomllib.load(f), source=str(path))
 
 
-def expand_command(job: JobSpec, cfg: Config, run_dir: Path) -> list[str]:
+def expand_command(job: JobSpec, cfg: Config, run_dir: Path,
+                   overrides: dict[str, Path] | None = None) -> list[str]:
+    """Fill in the placeholders; `overrides` replaces [paths] entries for this run only."""
     values = {k: str(v) for k, v in cfg.paths.items()}
+    values.update({k: str(v) for k, v in (overrides or {}).items()})
     values.update(python=sys.executable, run_dir=str(run_dir), runs=str(cfg.runs), inbox=str(cfg.inbox))
     return [part.format(**values) for part in job.command]

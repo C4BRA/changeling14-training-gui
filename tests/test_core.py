@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from changeling14_gui import config
+from changeling14_gui import codebases, config
 from changeling14_gui.png import Canvas
 from changeling14_gui.runfolder import RunFolder, list_runs, write_json_atomic
 from changeling14_gui.runner import Runner
@@ -71,6 +71,50 @@ def test_placeholders(cfg, tmp_path):
     cmd = config.expand_command(job, cfg, tmp_path / "r")
     assert cmd == [sys.executable, "--repo", "/data/wizden", "--out", str(tmp_path / "r"),
                    str(tmp_path / "runs" / "inbox")]
+
+
+def test_overrides_replace_paths_for_one_run(cfg, tmp_path):
+    job = config.JobSpec("x", "x", ("--repo", "{wizden}", "--out", "{sprite_dataset}"))
+    cfg = config.parse({"paths": {"wizden": "/data/wizden", "sprite_dataset": "/data/ds"}})
+    cmd = config.expand_command(job, cfg, tmp_path, {"wizden": Path("/data/oxyd")})
+    assert cmd == ["--repo", "/data/oxyd", "--out", "/data/ds"]
+    assert cfg.paths["wizden"] == Path("/data/wizden")
+
+
+def test_builtin_sprites_job_opens_the_picker():
+    cfg = config.parse(__import__("tomllib").loads(
+        (Path(config.__file__).parent / "jobs.toml").read_text()))
+    assert cfg.job("sprites").form == "sprites"
+    assert "{wizden}" in cfg.job("sprites").command and "{sprite_dataset}" in cfg.job("sprites").command
+
+
+def _checkout(path: Path) -> Path:
+    for part in codebases.NEEDS:
+        (path / part).mkdir(parents=True)
+    return path
+
+
+def test_codebase_picker(tmp_path):
+    wizden = _checkout(tmp_path / "wizden-ss14")
+    oxyd = _checkout(tmp_path / "Oxyd14")
+    (tmp_path / "not-a-checkout" / "Resources" / "Textures").mkdir(parents=True)
+    cfg = config.parse({"paths": {"wizden": str(wizden), "sprite_dataset": str(tmp_path / "ss14-sprite-dataset")}})
+
+    assert codebases.find_checkouts(cfg) == [wizden, oxyd]
+    assert codebases.checkout_root(oxyd / "Resources" / "Textures") == oxyd
+    assert codebases.checkout_root(tmp_path / "not-a-checkout") is None
+    assert codebases.default_out(wizden, cfg) == tmp_path / "ss14-sprite-dataset"
+    assert codebases.default_out(oxyd, cfg) == tmp_path / "ss14-sprite-dataset-oxyd14"
+
+    assert codebases.check_choice(oxyd, tmp_path / "new").ok
+    assert not codebases.check_choice(tmp_path / "not-a-checkout", tmp_path / "new").ok
+    assert not codebases.check_choice(oxyd, oxyd / "out").ok
+    stray = tmp_path / "stray"
+    stray.mkdir()
+    (stray / "notes.txt").write_text("x")
+    assert not codebases.check_choice(oxyd, stray).ok
+    (stray / "manifest.json").write_text("{}")
+    assert "rebuilt" in codebases.check_choice(oxyd, stray).message
 
 
 def test_duplicate_job_ids_rejected():

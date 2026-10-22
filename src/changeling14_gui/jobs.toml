@@ -14,6 +14,7 @@
 #
 # heavy = true jobs share one slot: only one runs at a time, the rest queue.
 # A job with an empty command shows as a disabled button.
+# form = "sprites" opens the codebase picker before the job starts.
 
 [paths]
 runs = "~/Desktop/SS13-14/changeling14-runs"
@@ -32,8 +33,11 @@ command = ["{python}", "-m", "changeling14_gui.demo", "--run-dir", "{run_dir}"]
 [[jobs]]
 id = "sprites"
 label = "Build sprite catalogue"
-description = "M0: cut every Wizden sprite, link sprites to entities, write credits and a report."
+description = "M0: choose a codebase, then cut its sprites, link them to entities, write credits and a report."
 heavy = true
+# Opens a window to pick the codebase and output folder; they replace
+# {wizden} and {sprite_dataset} for that run.
+form = "sprites"
 command = ["{python}", "-m", "changeling14_vision", "--run-dir", "{run_dir}",
            "sprites", "--repo", "{wizden}", "--out", "{sprite_dataset}"]
 

@@ -43,7 +43,7 @@ The built-in `jobs.toml` has:
 | Button | Runs |
 |---|---|
 | Demo training run | a fake 60-second run that writes progress, a log and a watch set, to try the app |
-| Build sprite catalogue | M0: `changeling14-vision sprites` on `~/Desktop/SS13-14/wizden-ss14` |
+| Build sprite catalogue | M0: `changeling14-vision sprites`; opens a window to pick the codebase (SS14 checkouts next to `~/Desktop/SS13-14/wizden-ss14` are listed, or choose any folder) and the output folder. Wizden builds into `ss14-sprite-dataset`, other codebases into `ss14-sprite-dataset-<name>` |
 | Train | sprite pretraining of the Tiny encoder; resumes from `latest.pt`, saves a checkpoint when stopped |
 | Benchmark | scores the checkpoint; writes `benchmark.md`, per-category accuracy and a mistakes gallery |
 | Export | exports the checkpoint |
