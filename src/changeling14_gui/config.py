@@ -33,6 +33,7 @@ class Config:
     jobs: tuple[JobSpec, ...] = field(default_factory=tuple)
     source: str = "<builtin>"
     paths: dict[str, Path] = field(default_factory=dict)  # every [paths] entry, for placeholders
+    values: dict[str, str] = field(default_factory=dict)  # every [values] entry, for placeholders
 
     def job(self, job_id: str) -> JobSpec:
         for job in self.jobs:
@@ -76,6 +77,7 @@ def parse(data: dict, source: str = "<builtin>") -> Config:
         jobs=tuple(jobs),
         source=source,
         paths=expanded,
+        values={str(k): str(v) for k, v in data.get("values", {}).items()},
     )
 
 
@@ -98,9 +100,11 @@ def load(explicit: str | None = None) -> Config:
 
 
 def expand_command(job: JobSpec, cfg: Config, run_dir: Path,
-                   overrides: dict[str, Path] | None = None) -> list[str]:
-    """Fill in the placeholders; `overrides` replaces [paths] entries for this run only."""
-    values = {k: str(v) for k, v in cfg.paths.items()}
+                   overrides: dict[str, Path | str] | None = None, extra: list[str] | None = None) -> list[str]:
+    """Fill in the placeholders; `overrides` replaces [paths] and [values]
+    entries for this run only, and `extra` arguments go on the end."""
+    values = dict(cfg.values)
+    values.update({k: str(v) for k, v in cfg.paths.items()})
     values.update({k: str(v) for k, v in (overrides or {}).items()})
     values.update(python=sys.executable, run_dir=str(run_dir), runs=str(cfg.runs), inbox=str(cfg.inbox))
-    return [part.format(**values) for part in job.command]
+    return [part.format(**values) for part in job.command] + list(extra or [])

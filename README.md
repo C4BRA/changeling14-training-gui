@@ -44,15 +44,20 @@ The built-in `jobs.toml` has:
 |---|---|
 | Demo training run | a fake 60-second run that writes progress, a log and a watch set, to try the app |
 | Build sprite catalogue | M0: `changeling14-vision sprites`; opens a window to pick the codebase (SS14 checkouts next to `~/Desktop/SS13-14/wizden-ss14` are listed, or choose any folder) and the output folder. Wizden builds into `ss14-sprite-dataset`, other codebases into `ss14-sprite-dataset-<name>` |
-| Train | sprite pretraining of the Tiny encoder; resumes from `latest.pt`, saves a checkpoint when stopped |
-| Benchmark | scores the checkpoint; writes `benchmark.md`, per-category accuracy and a mistakes gallery |
-| Export | exports the checkpoint |
+| Train | opens a window: continue a model (it keeps the catalogue it was started on) or start a new one on any catalogue, with size, steps, a time limit, half precision and start over. Resumes from `latest.pt`, saves a checkpoint when stopped |
+| Benchmark | pick a model and checkpoint; scores it on that model's own catalogue and writes `benchmark.md`, per-category accuracy and a mistakes gallery |
+| Export | pick a model and checkpoint to export |
 | Import replays, Build dataset | greyed out until those steps exist |
 
 Train, Benchmark and Export need the pipeline's extras:
 `pip install -e "$HOME/Desktop/SS13-14/changeling14-vision[train,text,export]"`
 (`text` adds sentence-transformers for text matching; MiniLM, about 90 MB, downloads once). Models go to
 `~/Desktop/SS13-14/changeling14-models/`.
+
+The pickers list the sprite catalogues (folders with `manifest.json`) beside
+`ss14-sprite-dataset` and the models (folders with `config.json`) in
+`changeling14-models`, read fresh from disk each time. Folders added with
+**Add catalogue…** or **Add model…** are remembered in `~/.changeling14/library.json`.
 
 To change paths or add jobs, copy `src/changeling14_gui/jobs.toml` to
 `~/.changeling14/gui.toml` and edit it, or pass `--config FILE`.

@@ -85,6 +85,7 @@ def test_builtin_sprites_job_opens_the_picker():
     cfg = config.parse(__import__("tomllib").loads(
         (Path(config.__file__).parent / "jobs.toml").read_text()))
     assert cfg.job("sprites").form == "sprites"
+    assert (cfg.job("train").form, cfg.job("benchmark").form, cfg.job("export").form) == ("train", "model", "model")
     assert "{wizden}" in cfg.job("sprites").command and "{sprite_dataset}" in cfg.job("sprites").command
 
 
@@ -214,3 +215,90 @@ def test_png_writer(tmp_path):
     length = int.from_bytes(data[idat - 4:idat], "big")
     raw = zlib.decompress(data[idat + 4:idat + 4 + length])
     assert raw == b"\x00" + bytes([1, 2, 3, 9, 9, 9, 1, 2, 3]) + b"\x00" + bytes([1, 2, 3] * 3)
+
+
+def _catalogue(path: Path, repo: str = "/src/wizden-ss14", images: int = 10) -> Path:
+    (path / "catalogue").mkdir(parents=True)
+    (path / "catalogue" / "images.jsonl").write_text("")
+    (path / "manifest.json").write_text(json.dumps({"source": {"repo": repo, "commit": "abcdef123456"},
+                                                    "generated_at": "2026-10-22T20:33:57Z"}))
+    (path / "report.json").write_text(json.dumps({"images": {"written": images}}))
+    return path
+
+
+def _model(path: Path, data: Path, size: str = "tiny", steps: int = 100, rows=()) -> Path:
+    (path / "checkpoints").mkdir(parents=True)
+    (path / "config.json").write_text(json.dumps({"data": str(data), "size": size, "steps": steps,
+                                                  "amp": False, "text_model": "m"}))
+    (path / "metrics.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+    for r in rows:
+        (path / "checkpoints" / f"step-{r['step']:07d}.pt").write_bytes(b"")
+    if rows:
+        (path / "latest.pt").write_bytes(b"")
+    return path
+
+
+@pytest.fixture
+def lib(tmp_path):
+    from changeling14_gui.library import Library
+    wizden = _catalogue(tmp_path / "ss14-sprite-dataset", images=77366)
+    oxyd = _catalogue(tmp_path / "ss14-sprite-dataset-oxyd14", repo="/src/Oxyd14")
+    models = tmp_path / "models"
+    _model(models / "sprite-pretrain-tiny", wizden,
+           rows=[{"step": 0, "unseen_category_top1": 0.01}, {"step": 1000, "unseen_category_top1": 0.12,
+                                                             "unseen_text_top5": 0.004},
+                 {"step": 1175, "unseen_category_top1": None}])
+    cfg = config.parse({"paths": {"sprite_dataset": str(wizden), "models": str(models),
+                                  "model_dir": str(models / "sprite-pretrain-tiny")}})
+    return Library(cfg, store=tmp_path / "library.json"), wizden, oxyd, models
+
+
+def test_library_lists_catalogues_and_models(lib, tmp_path):
+    library, wizden, oxyd, models = lib
+    cats = library.catalogues()
+    assert [c.path for c in cats] == [wizden, oxyd]
+    assert cats[0].codebase == "wizden-ss14" and cats[0].images == 77366 and cats[0].commit == "abcdef12"
+    (model,) = library.models()
+    assert model.catalogue == wizden and model.step == 1175 and model.scores["step"] == 1000
+    assert [p.name for p in model.checkpoints] == ["step-0000000.pt", "step-0001000.pt", "step-0001175.pt"]
+    assert library.new_model_path(wizden, "tiny") == models / "sprite-pretrain-tiny-2"   # taken
+    assert library.new_model_path(wizden, "small") == models / "sprite-pretrain-small"
+    assert library.new_model_path(oxyd, "small") == models / "sprite-pretrain-small-oxyd14"
+
+    elsewhere = _catalogue(tmp_path / "far" / "away" / "mine")
+    library.remember("catalogues", elsewhere)
+    library.remember("catalogues", elsewhere)
+    assert [c.path for c in library.catalogues()][-1] == elsewhere
+    assert json.loads((tmp_path / "library.json").read_text())["catalogues"] == [str(elsewhere)]
+
+
+def test_train_checks(lib, tmp_path):
+    from changeling14_gui import forms
+    library, wizden, oxyd, models = lib
+    (model,) = library.models()
+    assert forms.check_continue(model, "20000", "", False).ok
+    assert not forms.check_continue(model, "1000", "", False).ok          # already past it
+    assert forms.check_continue(model, "1000", "", True).ok               # start over
+    assert not forms.check_continue(model, "x", "", False).ok
+    assert not forms.check_continue(model, "20000", "-5", False).ok
+    assert forms.check_new(oxyd, str(models / "sprite-pretrain-tiny-oxyd14"), "tiny", "20000", "30").ok
+    assert not forms.check_new(oxyd, str(model.path), "tiny", "20000", "").ok   # already a model
+    assert not forms.check_new(None, str(models / "new"), "tiny", "20000", "").ok
+    assert not forms.check_new(oxyd, str(models / "new"), "huge", "20000", "").ok
+    assert forms.train_args("500", " 30 ", True, True, text=False) == [
+        "--steps", "500", "--minutes", "30", "--amp", "--fresh", "--no-text"]
+
+    assert forms.check_model(model, needs_data=True).ok
+    import shutil
+    shutil.rmtree(wizden)
+    assert not forms.check_continue(library.models()[0], "20000", "", False).ok
+    assert not forms.check_model(library.models()[0], needs_data=True).ok
+    assert forms.check_model(library.models()[0], needs_data=False).ok   # export needs no catalogue
+
+
+def test_values_and_extra_args(tmp_path):
+    cfg = config.parse({"paths": {"model_dir": "/m/a"}, "values": {"size": "tiny"}})
+    job = config.JobSpec("t", "t", ("train", "--out", "{model_dir}", "--size", "{size}"))
+    assert config.expand_command(job, cfg, tmp_path) == ["train", "--out", "/m/a", "--size", "tiny"]
+    assert config.expand_command(job, cfg, tmp_path, {"model_dir": Path("/m/b"), "size": "small"},
+                                 ["--steps", "5"]) == ["train", "--out", "/m/b", "--size", "small", "--steps", "5"]

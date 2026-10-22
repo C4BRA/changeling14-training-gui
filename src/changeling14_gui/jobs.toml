@@ -14,7 +14,9 @@
 #
 # heavy = true jobs share one slot: only one runs at a time, the rest queue.
 # A job with an empty command shows as a disabled button.
-# form = "sprites" opens the codebase picker before the job starts.
+# form = "sprites" opens the codebase picker before the job starts, "train"
+# the model picker with training options, "model" a model and checkpoint
+# picker. Their choices replace placeholders for that run only.
 
 [paths]
 runs = "~/Desktop/SS13-14/changeling14-runs"
@@ -22,6 +24,10 @@ inbox = "~/Desktop/SS13-14/replay-inbox"
 wizden = "~/Desktop/SS13-14/wizden-ss14"
 sprite_dataset = "~/Desktop/SS13-14/ss14-sprite-dataset"
 models = "~/Desktop/SS13-14/changeling14-models"
+model_dir = "~/Desktop/SS13-14/changeling14-models/sprite-pretrain-tiny"
+
+[values]
+size = "tiny"
 
 [[jobs]]
 id = "demo"
@@ -58,23 +64,26 @@ command = []
 [[jobs]]
 id = "train"
 label = "Train"
-description = "Sprite pretraining (Tiny); resumes from the latest checkpoint, saves on stop."
+description = "Sprite pretraining: continue a model or start a new one from a catalogue; saves on stop."
 heavy = true
+form = "train"
 command = ["{python}", "-m", "changeling14_vision", "--run-dir", "{run_dir}", "train",
-           "--data", "{sprite_dataset}", "--out", "{models}/sprite-pretrain-tiny", "--size", "tiny"]
+           "--data", "{sprite_dataset}", "--out", "{model_dir}", "--size", "{size}"]
 
 [[jobs]]
 id = "benchmark"
 label = "Benchmark"
-description = "Score a checkpoint on the frozen test set."
+description = "Score a model checkpoint on its catalogue's held-out sprites."
 heavy = true
+form = "model"
 command = ["{python}", "-m", "changeling14_vision", "--run-dir", "{run_dir}", "benchmark",
-           "--data", "{sprite_dataset}", "--out", "{models}/sprite-pretrain-tiny", "--size", "tiny"]
+           "--data", "{sprite_dataset}", "--out", "{model_dir}", "--size", "{size}"]
 
 [[jobs]]
 id = "export"
 label = "Export"
-description = "Export a checkpoint to MLX, ONNX and Core ML."
+description = "Export a model checkpoint to safetensors, ONNX, MLX and Core ML."
 heavy = true
+form = "model"
 command = ["{python}", "-m", "changeling14_vision", "--run-dir", "{run_dir}", "export",
-           "--out", "{models}/sprite-pretrain-tiny", "--size", "tiny"]
+           "--out", "{model_dir}", "--size", "{size}"]
