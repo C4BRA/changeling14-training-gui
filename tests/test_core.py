@@ -287,8 +287,18 @@ def test_train_checks(lib, tmp_path):
     assert not forms.check_new(oxyd, str(models / "new"), "huge", "20000", "").ok
     assert forms.train_args("500", " 30 ", True, True, text=False) == [
         "--steps", "500", "--minutes", "30", "--amp", "--fresh", "--no-text"]
+    assert forms.train_args("10000", "", False, False, batch=256, optimizer="schedulefree", rich_text=True) == [
+        "--steps", "10000", "--batch", "256", "--optimizer", "schedulefree", "--rich-text"]
+    assert forms.train_args("100", "", False, False, dedup=False) == ["--steps", "100", "--no-dedup"]
+    assert forms.rescale_steps("20000", 128, 256) == "10000"
+    assert forms.rescale_steps("10000", 256, 512) == "5000"
+    assert forms.rescale_steps("5000", 512, 128) == "20000"
+    assert forms.rescale_steps("abc", 128, 256) == "abc"
 
     assert forms.check_model(model, needs_data=True).ok
+    assert model.duplicates_report is None
+    (model.path / "duplicates.html").write_text("<html></html>")
+    assert library.models()[0].duplicates_report == model.path / "duplicates.html"
     import shutil
     shutil.rmtree(wizden)
     assert not forms.check_continue(library.models()[0], "20000", "", False).ok

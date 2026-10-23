@@ -7,6 +7,8 @@ tested without Tk.
 
 from __future__ import annotations
 
+import subprocess
+import sys
 import tkinter as tk
 from dataclasses import dataclass
 from pathlib import Path
@@ -124,8 +126,34 @@ def check_model(model: Model | None, needs_data: bool) -> Check:
     return Check(True, f"Uses {model.path.name}" + (f" on {model.catalogue.name}." if needs_data else "."))
 
 
-def train_args(steps: str, minutes: str, amp: bool, fresh: bool, text: bool = True) -> list[str]:
+BATCHES = (128, 256, 512)
+OPTIMIZERS = {"AdamW": "adamw", "Schedule-free": "schedulefree"}
+DEDUP_TIP = "Identical pictures count as one and never sit on both sides of the test. Untick to compare."
+RICH_TEXT_TIP = "New models only: also describes items by suffix, folders and a checked list of components"
+
+
+def rescale_steps(steps: str, old_batch: int, new_batch: int) -> str:
+    """Keep steps x batch (pictures seen) the same when the batch changes."""
+    try:
+        return str(max(1, round(int(steps) * old_batch / new_batch)))
+    except ValueError:
+        return steps
+
+
+def train_args(steps: str, minutes: str, amp: bool, fresh: bool, text: bool = True,
+               batch: int | None = None, optimizer: str | None = None, rich_text: bool = False,
+               dedup: bool = True) -> list[str]:
+    """Arguments after --out/--data/--size. batch, optimizer, rich_text and
+    dedup are for new models only; a continued model keeps its own."""
     args = ["--steps", str(int(steps))]
+    if batch:
+        args += ["--batch", str(batch)]
+    if optimizer:
+        args += ["--optimizer", optimizer]
+    if rich_text:
+        args.append("--rich-text")
+    if not dedup:
+        args.append("--no-dedup")
     if minutes.strip():
         args += ["--minutes", minutes.strip()]
     if amp:
@@ -138,6 +166,54 @@ def train_args(steps: str, minutes: str, amp: bool, fresh: bool, text: bool = Tr
 
 
 # Windows -----------------------------------------------------------------
+
+def _open_report(model: Model | None) -> None:
+    if model and model.duplicates_report:
+        opener = "open" if sys.platform == "darwin" else "xdg-open"
+        try:
+            subprocess.Popen([opener, str(model.duplicates_report)])
+        except OSError:
+            pass
+
+
+def _report_state(button, model: Model | None) -> None:
+    button.state(["!disabled"] if model and model.duplicates_report else ["disabled"])
+
+
+def _set_enabled(widget, on: bool) -> None:
+    """Enable or grey out a frame's widgets, nested ones included."""
+    for child in widget.winfo_children():
+        try:
+            child.state(["!disabled"] if on else ["disabled"])
+        except (AttributeError, tk.TclError):
+            pass
+        _set_enabled(child, on)
+
+
+class _Tooltip:
+    """A small note that appears while the pointer is over a widget."""
+
+    def __init__(self, widget, text: str):
+        self.widget, self.text, self.tip = widget, text, None
+        widget.bind("<Enter>", self.show)
+        widget.bind("<Leave>", self.hide)
+
+    def show(self, _event=None) -> None:
+        if self.tip:
+            return
+        x = self.widget.winfo_rootx() + 10
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
+        self.tip = tk.Toplevel(self.widget)
+        self.tip.wm_overrideredirect(True)
+        self.tip.wm_geometry(f"+{x}+{y}")
+        tk.Label(self.tip, text=self.text, background="#ffffe0", foreground="#222", relief="solid",
+                 borderwidth=1, wraplength=320, justify="left", padx=6, pady=3).pack()
+
+    def hide(self, _event=None) -> None:
+        if self.tip:
+            self.tip.destroy()
+            self.tip = None
+
 
 class _Window:
     title = ""
@@ -324,7 +400,12 @@ class TrainWindow(_Window):
         self.model_tree = _tree(cont, MODEL_COLUMNS, height=min(6, max(2, len(self.models))))
         self.model_tree.grid(row=0, column=0, sticky="ew")
         self.model_tree.bind("<<TreeviewSelect>>", lambda _e: self.on_model())
-        ttk.Button(cont, text="Add model…", command=self.add_model).grid(row=0, column=1, sticky="n", padx=(8, 0))
+        side = ttk.Frame(cont)
+        side.grid(row=0, column=1, sticky="n", padx=(8, 0))
+        ttk.Button(side, text="Add model…", command=self.add_model).pack(fill="x")
+        self.dup_btn = ttk.Button(side, text="Duplicates report",
+                                  command=lambda: _open_report(self._selected(self.model_tree, self.models)))
+        self.dup_btn.pack(fill="x", pady=(4, 0))
 
         ttk.Radiobutton(body, text="New model", variable=self.mode, value="new",
                         command=self.on_mode).grid(row=2, column=0, sticky="w")
@@ -349,6 +430,27 @@ class TrainWindow(_Window):
         out_entry = ttk.Entry(sizes, textvariable=self.out_var)
         out_entry.grid(row=0, column=3, sticky="ew", padx=(6, 0))
         out_entry.bind("<Key>", lambda _e: setattr(self, "out_touched", True))
+        ttk.Label(sizes, text="Batch").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        self.batch = tk.StringVar(value=str(BATCHES[0]))
+        self.last_batch = BATCHES[0]
+        batch_box = ttk.Combobox(sizes, textvariable=self.batch, values=[str(b) for b in BATCHES],
+                                 state="readonly", width=7)
+        batch_box.grid(row=1, column=1, padx=(6, 16), pady=(6, 0))
+        batch_box.bind("<<ComboboxSelected>>", lambda _e: self.on_batch())
+        ttk.Label(sizes, text="Optimiser").grid(row=1, column=2, sticky="w", pady=(6, 0))
+        options = ttk.Frame(sizes)
+        options.grid(row=1, column=3, sticky="w", padx=(6, 0), pady=(6, 0))
+        self.optimizer = tk.StringVar(value=next(iter(OPTIMIZERS)))
+        ttk.Combobox(options, textvariable=self.optimizer, values=list(OPTIMIZERS), state="readonly",
+                     width=13).pack(side="left")
+        self.rich_text = tk.BooleanVar(value=False)
+        rich = ttk.Checkbutton(options, text="Richer text", variable=self.rich_text)
+        rich.pack(side="left", padx=(16, 0))
+        _Tooltip(rich, RICH_TEXT_TIP)
+        self.dedup = tk.BooleanVar(value=True)
+        dedup = ttk.Checkbutton(options, text="Count duplicates once", variable=self.dedup)
+        dedup.pack(side="left", padx=(16, 0))
+        _Tooltip(dedup, DEDUP_TIP)
 
         opts = ttk.LabelFrame(body, text="Options", padding=8)
         opts.grid(row=4, column=0, columnspan=2, sticky="ew")
@@ -392,19 +494,18 @@ class TrainWindow(_Window):
     def on_mode(self) -> None:
         cont = self.mode.get() == "continue"
         for frame, on in ((self.cont, cont), (self.new, not cont)):
-            for child in frame.winfo_children():
-                try:
-                    child.state(["!disabled"] if on else ["disabled"])
-                except (AttributeError, tk.TclError):
-                    pass
+            _set_enabled(frame, on)
         self.fresh_box.state(["!disabled"] if cont else ["disabled"])
         if cont:
             self.on_model()
         else:
+            # A new model starts from the default length at the chosen batch.
+            self.steps.set(rescale_steps("20000", BATCHES[0], int(self.batch.get())))
             self.on_catalogue()
 
     def on_model(self) -> None:
         model = self._selected(self.model_tree, self.models)
+        _report_state(self.dup_btn, model)
         if model and self.mode.get() == "continue":
             self.steps.set(str(model.steps))
             self.amp.set(model.amp)
@@ -417,6 +518,11 @@ class TrainWindow(_Window):
             if cat and not self.out_touched:
                 self.out_var.set(str(self.library.new_model_path(cat.path, self.size.get())))
         self.refresh()
+
+    def on_batch(self) -> None:
+        new = int(self.batch.get())
+        self.steps.set(rescale_steps(self.steps.get(), self.last_batch, new))
+        self.last_batch = new
 
     def add_model(self) -> None:
         root = self._add_model(self.model_tree)
@@ -473,7 +579,9 @@ class TrainWindow(_Window):
             cat = self._selected(self.cat_tree, self.catalogues)
             out = Path(self.out_var.get().strip()).expanduser()
             overrides = {"model_dir": out, "sprite_dataset": cat.path, "size": self.size.get()}
-            extra = train_args(steps, minutes, amp, False)
+            extra = train_args(steps, minutes, amp, False, batch=int(self.batch.get()),
+                               optimizer=OPTIMIZERS[self.optimizer.get()], rich_text=self.rich_text.get(),
+                               dedup=self.dedup.get())
         self.result = (overrides, extra)
         self.top.destroy()
 
@@ -491,7 +599,11 @@ class ModelWindow(_Window):
         self.tree = _tree(body, MODEL_COLUMNS, height=min(8, max(3, len(self.models))))
         self.tree.grid(row=1, column=0, sticky="ew", pady=(4, 0))
         self.tree.bind("<<TreeviewSelect>>", lambda _e: self.on_model())
-        ttk.Button(body, text="Add model…", command=self.add_model).grid(row=1, column=1, sticky="n", padx=(8, 0))
+        side = ttk.Frame(body)
+        side.grid(row=1, column=1, sticky="n", padx=(8, 0))
+        ttk.Button(side, text="Add model…", command=self.add_model).pack(fill="x")
+        self.dup_btn = ttk.Button(side, text="Duplicates report", command=lambda: _open_report(self.selected()))
+        self.dup_btn.pack(fill="x", pady=(4, 0))
 
         row = ttk.Frame(body)
         row.grid(row=2, column=0, columnspan=2, sticky="w", pady=(10, 0))
@@ -510,6 +622,7 @@ class ModelWindow(_Window):
 
     def on_model(self) -> None:
         model = self.selected()
+        _report_state(self.dup_btn, model)
         labels, self.ckpt_paths = [], []
         if model:
             if model.has_latest:

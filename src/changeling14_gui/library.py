@@ -58,6 +58,12 @@ class Model:
     def has_latest(self) -> bool:
         return (self.path / "latest.pt").is_file()
 
+    @property
+    def duplicates_report(self) -> Path | None:
+        """duplicates.html, which training writes when it groups identical pictures."""
+        path = self.path / "duplicates.html"
+        return path if path.is_file() else None
+
 
 def is_catalogue(path: Path) -> bool:
     return (path / "manifest.json").is_file() and (path / "catalogue" / "images.jsonl").is_file()
