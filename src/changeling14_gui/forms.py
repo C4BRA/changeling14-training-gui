@@ -7,6 +7,8 @@ tested without Tk.
 
 from __future__ import annotations
 
+import subprocess
+import sys
 import tkinter as tk
 from dataclasses import dataclass
 from pathlib import Path
@@ -126,6 +128,7 @@ def check_model(model: Model | None, needs_data: bool) -> Check:
 
 BATCHES = (128, 256, 512)
 OPTIMIZERS = {"AdamW": "adamw", "Schedule-free": "schedulefree"}
+DEDUP_TIP = "Identical pictures count as one and never sit on both sides of the test. Untick to compare."
 RICH_TEXT_TIP = "New models only: also describes items by suffix, folders and a checked list of components"
 
 
@@ -138,9 +141,10 @@ def rescale_steps(steps: str, old_batch: int, new_batch: int) -> str:
 
 
 def train_args(steps: str, minutes: str, amp: bool, fresh: bool, text: bool = True,
-               batch: int | None = None, optimizer: str | None = None, rich_text: bool = False) -> list[str]:
-    """Arguments after --out/--data/--size. batch, optimizer and rich_text are
-    for new models only; a continued model keeps its own."""
+               batch: int | None = None, optimizer: str | None = None, rich_text: bool = False,
+               dedup: bool = True) -> list[str]:
+    """Arguments after --out/--data/--size. batch, optimizer, rich_text and
+    dedup are for new models only; a continued model keeps its own."""
     args = ["--steps", str(int(steps))]
     if batch:
         args += ["--batch", str(batch)]
@@ -148,6 +152,8 @@ def train_args(steps: str, minutes: str, amp: bool, fresh: bool, text: bool = Tr
         args += ["--optimizer", optimizer]
     if rich_text:
         args.append("--rich-text")
+    if not dedup:
+        args.append("--no-dedup")
     if minutes.strip():
         args += ["--minutes", minutes.strip()]
     if amp:
@@ -160,6 +166,19 @@ def train_args(steps: str, minutes: str, amp: bool, fresh: bool, text: bool = Tr
 
 
 # Windows -----------------------------------------------------------------
+
+def _open_report(model: Model | None) -> None:
+    if model and model.duplicates_report:
+        opener = "open" if sys.platform == "darwin" else "xdg-open"
+        try:
+            subprocess.Popen([opener, str(model.duplicates_report)])
+        except OSError:
+            pass
+
+
+def _report_state(button, model: Model | None) -> None:
+    button.state(["!disabled"] if model and model.duplicates_report else ["disabled"])
+
 
 def _set_enabled(widget, on: bool) -> None:
     """Enable or grey out a frame's widgets, nested ones included."""
@@ -381,7 +400,12 @@ class TrainWindow(_Window):
         self.model_tree = _tree(cont, MODEL_COLUMNS, height=min(6, max(2, len(self.models))))
         self.model_tree.grid(row=0, column=0, sticky="ew")
         self.model_tree.bind("<<TreeviewSelect>>", lambda _e: self.on_model())
-        ttk.Button(cont, text="Add model…", command=self.add_model).grid(row=0, column=1, sticky="n", padx=(8, 0))
+        side = ttk.Frame(cont)
+        side.grid(row=0, column=1, sticky="n", padx=(8, 0))
+        ttk.Button(side, text="Add model…", command=self.add_model).pack(fill="x")
+        self.dup_btn = ttk.Button(side, text="Duplicates report",
+                                  command=lambda: _open_report(self._selected(self.model_tree, self.models)))
+        self.dup_btn.pack(fill="x", pady=(4, 0))
 
         ttk.Radiobutton(body, text="New model", variable=self.mode, value="new",
                         command=self.on_mode).grid(row=2, column=0, sticky="w")
@@ -423,6 +447,10 @@ class TrainWindow(_Window):
         rich = ttk.Checkbutton(options, text="Richer text", variable=self.rich_text)
         rich.pack(side="left", padx=(16, 0))
         _Tooltip(rich, RICH_TEXT_TIP)
+        self.dedup = tk.BooleanVar(value=True)
+        dedup = ttk.Checkbutton(options, text="Count duplicates once", variable=self.dedup)
+        dedup.pack(side="left", padx=(16, 0))
+        _Tooltip(dedup, DEDUP_TIP)
 
         opts = ttk.LabelFrame(body, text="Options", padding=8)
         opts.grid(row=4, column=0, columnspan=2, sticky="ew")
@@ -477,6 +505,7 @@ class TrainWindow(_Window):
 
     def on_model(self) -> None:
         model = self._selected(self.model_tree, self.models)
+        _report_state(self.dup_btn, model)
         if model and self.mode.get() == "continue":
             self.steps.set(str(model.steps))
             self.amp.set(model.amp)
@@ -551,7 +580,8 @@ class TrainWindow(_Window):
             out = Path(self.out_var.get().strip()).expanduser()
             overrides = {"model_dir": out, "sprite_dataset": cat.path, "size": self.size.get()}
             extra = train_args(steps, minutes, amp, False, batch=int(self.batch.get()),
-                               optimizer=OPTIMIZERS[self.optimizer.get()], rich_text=self.rich_text.get())
+                               optimizer=OPTIMIZERS[self.optimizer.get()], rich_text=self.rich_text.get(),
+                               dedup=self.dedup.get())
         self.result = (overrides, extra)
         self.top.destroy()
 
@@ -569,7 +599,11 @@ class ModelWindow(_Window):
         self.tree = _tree(body, MODEL_COLUMNS, height=min(8, max(3, len(self.models))))
         self.tree.grid(row=1, column=0, sticky="ew", pady=(4, 0))
         self.tree.bind("<<TreeviewSelect>>", lambda _e: self.on_model())
-        ttk.Button(body, text="Add model…", command=self.add_model).grid(row=1, column=1, sticky="n", padx=(8, 0))
+        side = ttk.Frame(body)
+        side.grid(row=1, column=1, sticky="n", padx=(8, 0))
+        ttk.Button(side, text="Add model…", command=self.add_model).pack(fill="x")
+        self.dup_btn = ttk.Button(side, text="Duplicates report", command=lambda: _open_report(self.selected()))
+        self.dup_btn.pack(fill="x", pady=(4, 0))
 
         row = ttk.Frame(body)
         row.grid(row=2, column=0, columnspan=2, sticky="w", pady=(10, 0))
@@ -588,6 +622,7 @@ class ModelWindow(_Window):
 
     def on_model(self) -> None:
         model = self.selected()
+        _report_state(self.dup_btn, model)
         labels, self.ckpt_paths = [], []
         if model:
             if model.has_latest:
