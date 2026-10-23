@@ -105,6 +105,7 @@ def expand_command(job: JobSpec, cfg: Config, run_dir: Path,
     entries for this run only, and `extra` arguments go on the end."""
     values = dict(cfg.values)
     values.update({k: str(v) for k, v in cfg.paths.items()})
+    values.update(runs=str(cfg.runs), inbox=str(cfg.inbox))
     values.update({k: str(v) for k, v in (overrides or {}).items()})
-    values.update(python=sys.executable, run_dir=str(run_dir), runs=str(cfg.runs), inbox=str(cfg.inbox))
+    values.update(python=sys.executable, run_dir=str(run_dir))
     return [part.format(**values) for part in job.command] + list(extra or [])

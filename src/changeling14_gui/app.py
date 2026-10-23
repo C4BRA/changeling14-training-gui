@@ -16,7 +16,8 @@ from tkinter import messagebox, ttk
 
 from . import cards, sysinfo
 from .config import Config, JobSpec
-from .forms import FORMS
+from .forms import FORMS as SPRITE_FORMS
+from .replay_forms import REPLAY_FORMS
 from .runfolder import Checkpoint, RunFolder, list_runs
 from .runner import Runner
 
@@ -248,6 +249,9 @@ class WatchSetView(ttk.Frame):
             row=10, column=0, columnspan=3, sticky="w", pady=(10, 0))
         ttk.Button(body, text="Close", command=top.destroy).grid(row=11, column=2, sticky="e", pady=(10, 0))
         top.bind("<Escape>", lambda _e: top.destroy())
+
+
+FORMS = {**SPRITE_FORMS, **REPLAY_FORMS}
 
 
 class App:

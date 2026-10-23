@@ -63,7 +63,7 @@ def test_builtin_config_loads():
     ids = [j.id for j in cfg.jobs]
     assert ids[:2] == ["demo", "sprites"]
     assert cfg.job("demo").enabled and cfg.job("train").enabled
-    assert not cfg.job("import-replays").enabled
+    assert all(cfg.job(j).enabled for j in ("import-replays", "record-replays", "build-dataset", "train-replays"))
 
 
 def test_placeholders(cfg, tmp_path):
@@ -348,3 +348,63 @@ def test_watchset_cards(tmp_path):
     assert cards.summary(first).endswith("had 1 more in its top 5.")
     assert cards.summary(second, second) .endswith("no change since the last checkpoint.")
     assert cards.trend(cps) == [(0, 0.0, 1 / 3), (1000, 0.02, 0.1)]
+
+
+def test_replay_jobs(tmp_path):
+    from changeling14_gui import replays
+    lib, rec, models = tmp_path / "lib", tmp_path / "rec", tmp_path / "models"
+    (lib / "wizards-abc").mkdir(parents=True)
+    for name in ("salamander-x-round_115835.zip", "leviathan-y-round_115836.zip"):
+        (lib / "wizards-abc" / name).write_bytes(b"zip")
+    (lib / "replays.jsonl").write_text("".join(json.dumps({"file": f"wizards-abc/{n}", "build": "wizards-abc",
+                                                           "duration": d}) + "\n"
+                                               for n, d in (("salamander-x-round_115835.zip", 6270.0),
+                                                            ("leviathan-y-round_115836.zip", 4089.0),
+                                                            ("gone-round_1.zip", 1.0))))
+    (rec / "salamander-x-round_115835" / "frames").mkdir(parents=True)
+    for i in range(3):
+        (rec / "salamander-x-round_115835" / "frames" / f"{i}.png").write_bytes(b"")
+    for name, text in (("sprite-pretrain-nano", True), ("no-text", False)):
+        (models / name).mkdir(parents=True)
+        (models / name / "config.json").write_text("{}")
+        if text:
+            (models / name / "text.npz").write_bytes(b"")
+    cfg = config.parse({"paths": {"replay_library": str(lib), "replay_recordings": str(rec),
+                                  "replay_dataset": str(tmp_path / "ds"), "models": str(models)}})
+
+    items = replays.library_replays(cfg)
+    assert [(r.name, r.round_id, r.recorded) for r in items] == [
+        ("salamander-x-round_115835.zip", "115835", 3), ("leviathan-y-round_115836.zip", "115836", 0)]
+    assert replays.duration_text(6270.0) == "1 h 44 min"
+    assert replays.recording_rounds(cfg) == ["115835"]
+    assert replays.text_models(cfg) == [models / "sprite-pretrain-nano"]
+
+    src = tmp_path / "ss14"
+    (src / "RobustToolbox").mkdir(parents=True)
+    (src / ".git").mkdir()
+    assert replays.check_record(items[1], str(src), "10", "2", "")[0]
+    assert "replaces" in replays.check_record(items[0], str(src), "10", "2", "")[1]
+    assert not replays.check_record(items[1], str(tmp_path), "10", "2", "")[0]
+    assert not replays.check_record(items[1], str(src), "0", "2", "")[0]
+    assert replays.record_args("10", "2", "") == ["--interval", "10", "--players", "2"]
+    assert replays.record_args("2.5", "1", "6") == ["--interval", "2.5", "--players", "1", "--max-pictures", "6"]
+
+    assert replays.check_holdout("", ["115835", "115836"])[0]
+    assert not replays.check_holdout("115835, 115836", ["115835", "115836"])[0]
+    assert not replays.check_holdout("999", ["115835", "115836"])[0]
+    assert not replays.check_holdout("", [])[0]
+    assert replays.holdout_args(" 115836 ") == ["--holdout", "115836"] and replays.holdout_args("") == []
+
+    start = models / "sprite-pretrain-nano"
+    assert not replays.check_replay_train(start, "replay-nano", tmp_path / "ds", "6000", "8", "")[0]   # no dataset
+    (tmp_path / "ds").mkdir()
+    (tmp_path / "ds" / "dataset.json").write_text("{}")
+    assert replays.check_replay_train(start, "replay-nano", tmp_path / "ds", "6000", "8", "")[0]
+    assert not replays.check_replay_train(start, "sprite-pretrain-nano", tmp_path / "ds", "6000", "8", "")[0]
+    assert replays.replay_train_args("6000", "8", "30") == ["--steps", "6000", "--batch", "8", "--minutes", "30"]
+
+
+def test_overrides_win_over_inbox_and_runs(tmp_path):
+    cfg = config.parse({"paths": {"inbox": "/a/inbox"}})
+    job = config.JobSpec("x", "x", ("--inbox", "{inbox}"))
+    assert config.expand_command(job, cfg, tmp_path, {"inbox": Path("/b/inbox")}) == ["--inbox", "/b/inbox"]
