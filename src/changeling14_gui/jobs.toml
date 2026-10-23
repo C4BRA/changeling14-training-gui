@@ -29,6 +29,7 @@ model_dir = "~/Desktop/SS13-14/changeling14-models/sprite-pretrain-tiny"
 replay_library = "~/Desktop/SS13-14/replay-library"
 replay_recordings = "~/Desktop/SS13-14/replay-recordings"
 replay_dataset = "~/Desktop/SS13-14/replay-dataset"
+replay_datasets = "~/Desktop/SS13-14/replay-datasets"
 
 [values]
 size = "tiny"

@@ -49,8 +49,8 @@ The built-in `jobs.toml` has:
 | Export | pick a model and checkpoint to export |
 | Import replays | copies replay .zip files from the inbox into the replay library (`changeling14-vision replays import`); deleting them from the inbox is an opt-in checkbox |
 | Record replays | pick a library replay and the codebase checkout it came from; plays it in a replay client and saves pictures with answer keys (a game window opens and must stay visible) |
-| Build dataset | turns the recordings into a training dataset in `~/Desktop/SS13-14/replay-dataset`, with optional held-out round ids |
-| Train on replays | trains a model to find and name things in replay frames, starting from a sprite model trained with text |
+| Build dataset | turns the recordings into a training dataset with optional held-out round ids. Output name `replay-dataset` is the original `~/Desktop/SS13-14/replay-dataset`; any other name goes to `~/Desktop/SS13-14/replay-datasets/<name>` |
+| Train on replays | pick a dataset (every folder with a `dataset.json`, newest first, or Browse…) and a sprite model trained with text to start from; trains a model to find and name things in replay frames |
 
 Train, Benchmark and Export need the pipeline's extras:
 `pip install -e "$HOME/Desktop/SS13-14/changeling14-vision[train,text,export]"`

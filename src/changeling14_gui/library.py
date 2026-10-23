@@ -70,7 +70,10 @@ def is_catalogue(path: Path) -> bool:
 
 
 def is_model(path: Path) -> bool:
-    return (path / "config.json").is_file()
+    """A sprite (stage 1) model folder. Replay models, whose config.json
+    names a "start" model and a "dataset", belong to Train on replays."""
+    cfg = _read_json(path / "config.json")
+    return (path / "config.json").is_file() and not ("start" in cfg and "dataset" in cfg)
 
 
 def read_catalogue(path: Path) -> Catalogue:

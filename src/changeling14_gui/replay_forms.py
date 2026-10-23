@@ -16,6 +16,8 @@ from .forms import Check, _Tooltip, _tree, _Window
 RECORD_NOTE = "A game window opens and must stay visible; one job at a time."
 DELETE_TIP = "Off: the inbox keeps its .zip files. On: each one is deleted once its copy in the library is checked."
 HOLDOUT_TIP = "Round ids whose pictures are only used for testing, e.g. 115836. Empty: about 1 in 5 rounds."
+DATASET_COLUMNS = (("dataset", "Dataset", 200), ("frames", "Frames", 65), ("train", "Train", 65),
+                   ("test", "Test", 65), ("held", "Test rounds", 110), ("built", "Built", 120))
 REPLAY_COLUMNS = (("replay", "Replay", 300), ("build", "Build", 170), ("length", "Length", 80),
                   ("recorded", "Recorded", 90))
 
@@ -161,19 +163,36 @@ class BuildDatasetWindow(_ReplayWindow):
         self.holdout = tk.StringVar()
         _row(form, 0, "Held-out round ids", self.holdout, width=24, tip=HOLDOUT_TIP)
         self.holdout.trace_add("write", lambda *_a: self.refresh())
+        self.name = tk.StringVar(value=cfg.paths["replay_dataset"].name)
+        _row(form, 1, "Output name", self.name, width=24,
+             tip=f"replay-dataset is the original folder; any other name goes in {replays.datasets_dir(cfg)}.")
+        self.name.trace_add("write", lambda *_a: self.refresh())
         self._footer(2, "Build")
         self.refresh()
+
+    def out(self) -> Path:
+        return replays.dataset_path(self.cfg, self.name.get())
+
+    def check(self) -> tuple[bool, str]:
+        ok, message = replays.check_holdout(self.holdout.get(), self.rounds)
+        if not ok:
+            return ok, message
+        problem = replays.check_dataset_name(self.name.get())
+        if problem:
+            return False, problem
+        out_ok, out_message = replays.check_dataset_out(str(self.out()))
+        return (out_ok, f"{message} {out_message}") if out_ok else (False, out_message)
 
     def refresh(self) -> None:
         if not hasattr(self, "ok_btn"):
             return
-        self._show2(replays.check_holdout(self.holdout.get(), self.rounds),
-                    f"Writes {self.cfg.paths['replay_dataset']}, replacing the dataset already there.")
+        self._show2(self.check(), "Train on replays lets you pick which dataset to train on.")
 
     def ok(self) -> None:
-        if not replays.check_holdout(self.holdout.get(), self.rounds)[0]:
+        if not self.check()[0]:
             return
-        self.result = ({}, replays.holdout_args(self.holdout.get()))
+        self.result = ({"replay_dataset": self.out()},
+                       replays.holdout_args(self.holdout.get()))
         self.top.destroy()
 
 
@@ -193,8 +212,16 @@ class TrainReplaysWindow(_ReplayWindow):
         if not self.models:
             self.start_list.insert("end", "No sprite model with text.npz in the models folder")
         self.start_list.bind("<<ListboxSelect>>", lambda _e: self.on_start())
+        ttk.Label(body, text="Dataset").grid(row=2, column=0, sticky="w", pady=(8, 0))
+        self.datasets = replays.replay_datasets(cfg)
+        self.ds_tree = _tree(body, DATASET_COLUMNS, height=min(5, max(2, len(self.datasets))))
+        self.ds_tree.grid(row=3, column=0, sticky="ew", pady=(4, 0))
+        self.ds_tree.bind("<<TreeviewSelect>>", lambda _e: self.refresh())
+        ttk.Button(body, text="Browse…", command=self.add_dataset).grid(row=3, column=1, sticky="n", padx=(8, 0),
+                                                                             pady=(4, 0))
+        self._fill_datasets(None)     # newest first, so the newest is preselected
         form = ttk.Frame(body)
-        form.grid(row=2, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        form.grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 0))
         self.name, self.steps, self.batch, self.minutes = (tk.StringVar(), tk.StringVar(value="6000"),
                                                            tk.StringVar(value="8"), tk.StringVar())
         self.name_touched = False
@@ -206,7 +233,7 @@ class TrainReplaysWindow(_ReplayWindow):
         _row(form, 3, "Stop after (minutes)", self.minutes, tip="Empty: no time limit.")
         for var in (self.name, self.steps, self.batch, self.minutes):
             var.trace_add("write", lambda *_a: self.refresh())
-        self._footer(3, "Train")
+        self._footer(5, "Train")
         if self.models:
             self.start_list.selection_set(0)
         self.on_start()
@@ -215,6 +242,29 @@ class TrainReplaysWindow(_ReplayWindow):
         sel = self.start_list.curselection()
         return self.models[sel[0]] if sel and sel[0] < len(self.models) else None
 
+    def _fill_datasets(self, select: Path | None) -> None:
+        self.ds_tree.delete(*self.ds_tree.get_children())
+        for i, ds in enumerate(self.datasets):
+            self.ds_tree.insert("", "end", iid=str(i), values=ds.describe())
+        index = next((i for i, d in enumerate(self.datasets) if d.path == select), 0 if self.datasets else None)
+        if index is not None:
+            self.ds_tree.selection_set(str(index))
+
+    def dataset(self) -> Path | None:
+        sel = self.ds_tree.selection()
+        return self.datasets[int(sel[0])].path if sel and int(sel[0]) < len(self.datasets) else None
+
+    def add_dataset(self) -> None:
+        picked = self._ask_folder("Choose a replay dataset", self.cfg.paths["replay_dataset"].parent)
+        if picked is None:
+            return
+        if not replays.is_dataset(picked):
+            self._show2((False, f"{picked} is not a replay dataset (no dataset.json)."))
+            return
+        self.datasets = replays.replay_datasets(self.cfg, [d.path for d in self.datasets] + [picked])
+        self._fill_datasets(picked)
+        self.refresh()
+
     def on_start(self) -> None:
         start = self.selected()
         if start and not self.name_touched:
@@ -222,7 +272,7 @@ class TrainReplaysWindow(_ReplayWindow):
         self.refresh()
 
     def check(self) -> tuple[bool, str]:
-        return replays.check_replay_train(self.selected(), self.name.get(), self.cfg.paths["replay_dataset"],
+        return replays.check_replay_train(self.selected(), self.name.get(), self.dataset(),
                                           self.steps.get(), self.batch.get(), self.minutes.get())
 
     def refresh(self) -> None:
@@ -234,7 +284,8 @@ class TrainReplaysWindow(_ReplayWindow):
         if not self.check()[0]:
             return
         start = self.selected()
-        overrides = {"replay_model": self.name.get().strip(), "start_model": start, "models": start.parent}
+        overrides = {"replay_model": self.name.get().strip(), "start_model": start, "models": start.parent,
+                     "replay_dataset": self.dataset()}
         self.result = (overrides, replays.replay_train_args(self.steps.get(), self.batch.get(), self.minutes.get()))
         self.top.destroy()
 

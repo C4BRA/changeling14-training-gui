@@ -378,6 +378,10 @@ def test_replay_jobs(tmp_path):
     assert replays.duration_text(6270.0) == "1 h 44 min"
     assert replays.recording_rounds(cfg) == ["115835"]
     assert replays.text_models(cfg) == [models / "sprite-pretrain-nano"]
+    (models / "replay-x").mkdir()
+    (models / "replay-x" / "config.json").write_text('{"start": "a", "dataset": "b"}')
+    (models / "replay-x" / "text.npz").write_bytes(b"")
+    assert replays.text_models(cfg) == [models / "sprite-pretrain-nano"]
 
     src = tmp_path / "ss14"
     (src / "RobustToolbox").mkdir(parents=True)
@@ -397,6 +401,7 @@ def test_replay_jobs(tmp_path):
 
     start = models / "sprite-pretrain-nano"
     assert not replays.check_replay_train(start, "replay-nano", tmp_path / "ds", "6000", "8", "")[0]   # no dataset
+    assert not replays.check_replay_train(start, "replay-nano", None, "6000", "8", "")[0]
     (tmp_path / "ds").mkdir()
     (tmp_path / "ds" / "dataset.json").write_text("{}")
     assert replays.check_replay_train(start, "replay-nano", tmp_path / "ds", "6000", "8", "")[0]
@@ -408,3 +413,32 @@ def test_overrides_win_over_inbox_and_runs(tmp_path):
     cfg = config.parse({"paths": {"inbox": "/a/inbox"}})
     job = config.JobSpec("x", "x", ("--inbox", "{inbox}"))
     assert config.expand_command(job, cfg, tmp_path, {"inbox": Path("/b/inbox")}) == ["--inbox", "/b/inbox"]
+
+
+def test_replay_datasets(tmp_path):
+    import os
+    from changeling14_gui import replays
+    legacy, named = tmp_path / "replay-dataset", tmp_path / "replay-datasets"
+    cfg = config.parse({"paths": {"replay_dataset": str(legacy), "replay_datasets": str(named)}})
+    assert replays.dataset_path(cfg, "replay-dataset") == legacy
+    assert replays.dataset_path(cfg, " zoom1 ") == named / "zoom1"
+    assert replays.check_dataset_name("bad name/") and replays.check_dataset_name("") and not replays.check_dataset_name("v2.1_x")
+
+    def make(path, frames, mtime):
+        path.mkdir(parents=True)
+        (path / "dataset.json").write_text('{"version": 1, "tile": 32, "summary": {"frames": %d, "train_frames": 3, '
+                                           '"test_frames": 1, "test_rounds": ["115836"]}, "frames": []}' % frames)
+        os.utime(path / "dataset.json", (mtime, mtime))
+    make(legacy, 1717, 1000)
+    make(named / "zoom1", 1600, 2000)
+    (named / "empty").mkdir()
+    elsewhere = tmp_path / "far" / "mine"
+    make(elsewhere, 5, 500)
+    found = replays.replay_datasets(cfg, [elsewhere])
+    assert [d.path for d in found] == [named / "zoom1", legacy, elsewhere]          # newest first
+    assert found[1].describe()[:5] == ("replay-dataset", "1,717", "3", "1", "115836")
+    assert replays.check_dataset_out(str(legacy))[1].startswith("Replaces")
+    assert replays.check_dataset_out(str(named / "new"))[0]
+    (tmp_path / "junk").mkdir()
+    (tmp_path / "junk" / "x.txt").write_text("x")
+    assert not replays.check_dataset_out(str(tmp_path / "junk"))[0]
