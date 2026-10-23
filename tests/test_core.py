@@ -442,3 +442,27 @@ def test_replay_datasets(tmp_path):
     (tmp_path / "junk").mkdir()
     (tmp_path / "junk" / "x.txt").write_text("x")
     assert not replays.check_dataset_out(str(tmp_path / "junk"))[0]
+
+
+def test_failure_reason_and_keep_args(tmp_path):
+    from changeling14_gui import forms, replays
+    run = RunFolder(tmp_path)
+    (tmp_path / "console.log").write_text("detect: starting\n/x/replay-a was trained on the dataset in /d1, not /d2; "
+                                          "pass --allow-new-data to resume it anyway\n\n[exit code 1]\n")
+    assert run.failure_reason().startswith("/x/replay-a was trained on the dataset")
+    (tmp_path / "console.log").write_text("train: x\nerror: something broke\nmore\n[exit code 2]\n")
+    assert run.failure_reason() == "error: something broke"
+    assert forms.train_args("10", "", False, False, keep="5") == ["--steps", "10", "--keep-checkpoints", "5"]
+    assert forms.check_keep("-1") and forms.check_keep("x") and not forms.check_keep("0")
+    assert replays.replay_train_args("6000", "8", "", "0", True) == [
+        "--steps", "6000", "--batch", "8", "--keep-checkpoints", "0", "--allow-new-data"]
+
+
+def test_dataset_picker_skips_rebuild_folders(tmp_path):
+    from changeling14_gui import replays
+    named = tmp_path / "replay-datasets"
+    for n in ("audit-v2", ".audit-v2.building", ".audit-v2.previous"):
+        (named / n).mkdir(parents=True)
+        (named / n / "dataset.json").write_text('{"version": 2, "summary": {"frames": 1}}')
+    cfg = config.parse({"paths": {"replay_dataset": str(tmp_path / "replay-dataset"), "replay_datasets": str(named)}})
+    assert [d.path.name for d in replays.replay_datasets(cfg)] == ["audit-v2"]

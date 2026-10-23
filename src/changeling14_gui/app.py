@@ -491,7 +491,11 @@ class App:
             self.state_label.configure(text=f"No runs yet in {self.cfg.runs}")
             return
         state = run.state()
-        self.state_label.configure(text=f"{STATE_MARK.get(state, '')} {state}")
+        reason = run.failure_reason() if state == "failed" else ""
+        if len(reason) > 140:
+            reason = reason[:139] + "…"
+        self.state_label.configure(text=f"{STATE_MARK.get(state, '')} {state}" + (f": {reason}" if reason else ""),
+                                   foreground="#b00020" if reason else "")
         status = run.status()
         if state == "running":
             self.eta_label.configure(text=f"About {format_duration(run.eta_seconds())} left")

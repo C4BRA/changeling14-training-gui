@@ -149,7 +149,8 @@ def replay_datasets(cfg: Config, extra: list[Path] = ()) -> list[ReplayDataset]:
     folders, newest first."""
     found = [cfg.paths["replay_dataset"]]
     try:
-        found += sorted(p for p in datasets_dir(cfg).iterdir() if p.is_dir())
+        # Rebuilds leave .<name>.building / .<name>.previous beside a dataset.
+        found += sorted(p for p in datasets_dir(cfg).iterdir() if p.is_dir() and not p.name.startswith("."))
     except OSError:
         pass
     found += list(extra)
@@ -230,10 +231,14 @@ def holdout_args(holdout: str) -> list[str]:
     return ["--holdout", ",".join(ids)] if ids else []
 
 
-def replay_train_args(steps: str, batch: str, minutes: str) -> list[str]:
+def replay_train_args(steps: str, batch: str, minutes: str, keep: str = "", allow_new_data: bool = False) -> list[str]:
     args = ["--steps", str(int(steps)), "--batch", str(int(batch))]
     if minutes.strip():
         args += ["--minutes", minutes.strip()]
+    if keep.strip():
+        args += ["--keep-checkpoints", str(int(keep))]
+    if allow_new_data:
+        args.append("--allow-new-data")
     return args
 
 
@@ -282,7 +287,7 @@ def check_holdout(holdout: str, rounds: list[str]) -> tuple[bool, str]:
 
 
 def check_replay_train(start: Path | None, name: str, dataset: Path | None, steps: str, batch: str,
-                       minutes: str) -> tuple[bool, str]:
+                       minutes: str, keep: str = "5") -> tuple[bool, str]:
     if start is None:
         return False, "Choose the sprite model to start from (one trained with text)."
     if dataset is None or not is_dataset(dataset):
@@ -293,9 +298,15 @@ def check_replay_train(start: Path | None, name: str, dataset: Path | None, step
                     _positive(minutes, "Stop after", float, optional=True)):
         if problem:
             return False, problem
+    try:
+        if keep.strip() and int(keep) < 0:
+            raise ValueError
+    except ValueError:
+        return False, "Keep checkpoints must be a whole number (0 keeps all)."
     out = start.parent / name.strip()
     if out.resolve() == start.resolve():
         return False, "The new model needs its own folder, not the starting model's."
     if out.exists():
-        return True, f"{name.strip()} exists, so training resumes it."
+        return True, (f"{name.strip()} exists, so training resumes it. It refuses if that model was trained on "
+                      "another dataset or start model, unless you tick Resume on new data.")
     return True, f"A new replay model {name.strip()}, starting from {start.name}."

@@ -231,7 +231,15 @@ class TrainReplaysWindow(_ReplayWindow):
         _row(form, 1, "Steps", self.steps)
         _row(form, 2, "Batch", self.batch, tip="480x480 crops per step.")
         _row(form, 3, "Stop after (minutes)", self.minutes, tip="Empty: no time limit.")
-        for var in (self.name, self.steps, self.batch, self.minutes):
+        self.keep = tk.StringVar(value="5")
+        _row(form, 4, "Keep checkpoints", self.keep,
+             tip="Newest checkpoints kept, plus the best one; older ones are deleted. 0 keeps all.")
+        self.allow_new = tk.BooleanVar(value=False)
+        self.allow_box = ttk.Checkbutton(form, text="Resume on new data", variable=self.allow_new)
+        self.allow_box.grid(row=5, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        _Tooltip(self.allow_box, "Only for a model that already exists: keep training it although the dataset "
+                                 "was rebuilt or is another one (--allow-new-data).")
+        for var in (self.name, self.steps, self.batch, self.minutes, self.keep):
             var.trace_add("write", lambda *_a: self.refresh())
         self._footer(5, "Train")
         if self.models:
@@ -273,11 +281,19 @@ class TrainReplaysWindow(_ReplayWindow):
 
     def check(self) -> tuple[bool, str]:
         return replays.check_replay_train(self.selected(), self.name.get(), self.dataset(),
-                                          self.steps.get(), self.batch.get(), self.minutes.get())
+                                          self.steps.get(), self.batch.get(), self.minutes.get(), self.keep.get())
+
+    def resuming(self) -> bool:
+        start = self.selected()
+        return bool(start and self.name.get().strip() and (start.parent / self.name.get().strip()).exists())
 
     def refresh(self) -> None:
         if not hasattr(self, "ok_btn"):
             return
+        resuming = self.resuming()
+        self.allow_box.state(["!disabled"] if resuming else ["disabled"])
+        if not resuming:
+            self.allow_new.set(False)
         self._show2(self.check())
 
     def ok(self) -> None:
@@ -286,7 +302,8 @@ class TrainReplaysWindow(_ReplayWindow):
         start = self.selected()
         overrides = {"replay_model": self.name.get().strip(), "start_model": start, "models": start.parent,
                      "replay_dataset": self.dataset()}
-        self.result = (overrides, replays.replay_train_args(self.steps.get(), self.batch.get(), self.minutes.get()))
+        self.result = (overrides, replays.replay_train_args(self.steps.get(), self.batch.get(), self.minutes.get(),
+                                                            self.keep.get(), self.allow_new.get() and self.resuming()))
         self.top.destroy()
 
 

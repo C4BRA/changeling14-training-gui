@@ -100,6 +100,15 @@ def check_new(catalogue: Path | None, out: str, size: str, steps: str, minutes: 
     return Check(True, f"A new {size} model in {path.name}, trained on {catalogue.name}.")
 
 
+def check_keep(keep: str) -> Check | None:
+    try:
+        if keep.strip() and int(keep) < 0:
+            raise ValueError
+    except ValueError:
+        return Check(False, "Keep checkpoints must be a whole number (0 keeps all).")
+    return None
+
+
 def _check_numbers(steps: str, minutes: str) -> Check | None:
     try:
         if int(steps) <= 0:
@@ -129,6 +138,7 @@ def check_model(model: Model | None, needs_data: bool) -> Check:
 BATCHES = (128, 256, 512)
 OPTIMIZERS = {"AdamW": "adamw", "Schedule-free": "schedulefree"}
 DEDUP_TIP = "Identical pictures count as one and never sit on both sides of the test. Untick to compare."
+KEEP_TIP = "Newest checkpoints kept, plus the best one; older ones are deleted. 0 keeps all."
 RICH_TEXT_TIP = "New models only: also describes items by suffix, folders and a checked list of components"
 
 
@@ -142,7 +152,7 @@ def rescale_steps(steps: str, old_batch: int, new_batch: int) -> str:
 
 def train_args(steps: str, minutes: str, amp: bool, fresh: bool, text: bool = True,
                batch: int | None = None, optimizer: str | None = None, rich_text: bool = False,
-               dedup: bool = True) -> list[str]:
+               dedup: bool = True, keep: str = "") -> list[str]:
     """Arguments after --out/--data/--size. batch, optimizer, rich_text and
     dedup are for new models only; a continued model keeps its own."""
     args = ["--steps", str(int(steps))]
@@ -154,6 +164,8 @@ def train_args(steps: str, minutes: str, amp: bool, fresh: bool, text: bool = Tr
         args.append("--rich-text")
     if not dedup:
         args.append("--no-dedup")
+    if keep.strip():
+        args += ["--keep-checkpoints", str(int(keep))]
     if minutes.strip():
         args += ["--minutes", minutes.strip()]
     if amp:
@@ -462,13 +474,18 @@ class TrainWindow(_Window):
         self.minutes = tk.StringVar()
         ttk.Entry(opts, textvariable=self.minutes, width=6).grid(row=0, column=3, padx=(6, 2))
         ttk.Label(opts, text="minutes (empty: no limit)").grid(row=0, column=4, sticky="w", padx=(0, 16))
+        ttk.Label(opts, text="Keep checkpoints").grid(row=0, column=5, sticky="w")
+        self.keep = tk.StringVar(value="5")
+        keep_entry = ttk.Entry(opts, textvariable=self.keep, width=4)
+        keep_entry.grid(row=0, column=6, padx=(6, 0))
+        _Tooltip(keep_entry, KEEP_TIP)
         self.amp = tk.BooleanVar(value=False)
         ttk.Checkbutton(opts, text="Half precision (faster on Apple GPUs)", variable=self.amp).grid(
             row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
         self.fresh = tk.BooleanVar(value=False)
         self.fresh_box = ttk.Checkbutton(opts, text="Start over from step 0", variable=self.fresh)
         self.fresh_box.grid(row=1, column=3, columnspan=2, sticky="w", pady=(6, 0))
-        for var in (self.steps, self.minutes, self.out_var, self.mode):
+        for var in (self.steps, self.minutes, self.out_var, self.mode, self.keep):
             var.trace_add("write", lambda *_a: self.refresh())
         self.fresh.trace_add("write", lambda *_a: self.refresh())
 
@@ -550,6 +567,9 @@ class TrainWindow(_Window):
     # Result --------------------------------------------------------------
 
     def check(self) -> Check:
+        bad = check_keep(self.keep.get())
+        if bad:
+            return bad
         if self.mode.get() == "continue":
             return check_continue(self._selected(self.model_tree, self.models), self.steps.get(),
                                   self.minutes.get(), self.fresh.get())
@@ -574,14 +594,14 @@ class TrainWindow(_Window):
         if self.mode.get() == "continue":
             model = self._selected(self.model_tree, self.models)
             overrides = {"model_dir": model.path, "sprite_dataset": model.catalogue, "size": model.size}
-            extra = train_args(steps, minutes, amp, self.fresh.get(), model.text)
+            extra = train_args(steps, minutes, amp, self.fresh.get(), model.text, keep=self.keep.get())
         else:
             cat = self._selected(self.cat_tree, self.catalogues)
             out = Path(self.out_var.get().strip()).expanduser()
             overrides = {"model_dir": out, "sprite_dataset": cat.path, "size": self.size.get()}
             extra = train_args(steps, minutes, amp, False, batch=int(self.batch.get()),
                                optimizer=OPTIMIZERS[self.optimizer.get()], rich_text=self.rich_text.get(),
-                               dedup=self.dedup.get())
+                               dedup=self.dedup.get(), keep=self.keep.get())
         self.result = (overrides, extra)
         self.top.destroy()
 
