@@ -196,6 +196,25 @@ def is_replay_model(path: Path) -> bool:
     return isinstance(cfg, dict) and "start" in cfg and "dataset" in cfg
 
 
+def replay_models(cfg: Config) -> list[Path]:
+    """Models trained on replays (Train on replays), newest first, for the live overlay."""
+    models = cfg.paths.get("models")
+    try:
+        found = [p for p in models.iterdir() if (p / "latest.pt").is_file() and is_replay_model(p)] if models else []
+    except OSError:
+        return []
+    return sorted(found, key=lambda p: -(p / "latest.pt").stat().st_mtime)
+
+
+def overlay_args(floor: bool, pick: bool, threshold: str) -> list[str]:
+    args = ["--threshold", f"{float(threshold):g}"]
+    if floor:
+        args.append("--floor")
+    if pick:
+        args.append("--pick")
+    return args
+
+
 def text_models(cfg: Config) -> list[Path]:
     """Sprite models a replay model can start from: stage-1 folders with text.npz."""
     models = cfg.paths.get("models")

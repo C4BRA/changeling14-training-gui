@@ -466,3 +466,16 @@ def test_dataset_picker_skips_rebuild_folders(tmp_path):
         (named / n / "dataset.json").write_text('{"version": 2, "summary": {"frames": 1}}')
     cfg = config.parse({"paths": {"replay_dataset": str(tmp_path / "replay-dataset"), "replay_datasets": str(named)}})
     assert [d.path.name for d in replays.replay_datasets(cfg)] == ["audit-v2"]
+
+
+def test_live_overlay_models_and_args(tmp_path):
+    from changeling14_gui import replays
+    models = tmp_path / "models"
+    for name, cfgtext in (("sprite-pretrain-nano", '{"data": "x"}'), ("replay-a", '{"start": "s", "dataset": "d"}')):
+        (models / name).mkdir(parents=True)
+        (models / name / "config.json").write_text(cfgtext)
+        (models / name / "latest.pt").write_bytes(b"")
+    cfg = config.parse({"paths": {"models": str(models)}})
+    assert replays.replay_models(cfg) == [models / "replay-a"]
+    assert replays.overlay_args(True, False, "0.4") == ["--threshold", "0.4", "--floor"]
+    assert replays.overlay_args(False, True, "0.5") == ["--threshold", "0.5", "--pick"]
