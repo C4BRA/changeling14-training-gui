@@ -63,7 +63,8 @@ def main(argv: list[str] | None = None) -> int:
                 continue
         log.write(f"\n[exit code {code}]\n".encode())
 
-    if stop_requested:
+    if stop_requested or code in (143, -15):
+        # 143 is how the pipeline reports a clean stop (it leaves its old output as it was).
         state = "stopped"
     else:
         state = "done" if code == 0 else "failed"

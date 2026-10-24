@@ -16,7 +16,8 @@ from tkinter import messagebox, ttk
 
 from . import cards, sysinfo
 from .config import Config, JobSpec
-from .forms import FORMS
+from .forms import FORMS as SPRITE_FORMS
+from .replay_forms import REPLAY_FORMS
 from .runfolder import Checkpoint, RunFolder, list_runs
 from .runner import Runner
 
@@ -248,6 +249,9 @@ class WatchSetView(ttk.Frame):
             row=10, column=0, columnspan=3, sticky="w", pady=(10, 0))
         ttk.Button(body, text="Close", command=top.destroy).grid(row=11, column=2, sticky="e", pady=(10, 0))
         top.bind("<Escape>", lambda _e: top.destroy())
+
+
+FORMS = {**SPRITE_FORMS, **REPLAY_FORMS}
 
 
 class App:
@@ -487,7 +491,11 @@ class App:
             self.state_label.configure(text=f"No runs yet in {self.cfg.runs}")
             return
         state = run.state()
-        self.state_label.configure(text=f"{STATE_MARK.get(state, '')} {state}")
+        reason = run.failure_reason() if state == "failed" else ""
+        if len(reason) > 140:
+            reason = reason[:139] + "…"
+        self.state_label.configure(text=f"{STATE_MARK.get(state, '')} {state}" + (f": {reason}" if reason else ""),
+                                   foreground="#b00020" if reason else "")
         status = run.status()
         if state == "running":
             self.eta_label.configure(text=f"About {format_duration(run.eta_seconds())} left")

@@ -47,7 +47,11 @@ The built-in `jobs.toml` has:
 | Train | opens a window: continue a model (it keeps the catalogue it was started on) or start a new one on any catalogue, with size, steps, a time limit, half precision and start over. Resumes from `latest.pt`, saves a checkpoint when stopped |
 | Benchmark | pick a model and checkpoint; scores it on that model's own catalogue and writes `benchmark.md`, per-category accuracy and a mistakes gallery |
 | Export | pick a model and checkpoint to export |
-| Import replays, Build dataset | greyed out until those steps exist |
+| Import replays | copies replay .zip files from the inbox into the replay library (`changeling14-vision replays import`); deleting them from the inbox is an opt-in checkbox |
+| Record replays | pick a library replay and the codebase checkout it came from; plays it in a replay client and saves pictures with answer keys (a game window opens and must stay visible) |
+| Build dataset | turns the recordings into a training dataset with optional held-out round ids. Output name `replay-dataset` is the original `~/Desktop/SS13-14/replay-dataset`; any other name goes to `~/Desktop/SS13-14/replay-datasets/<name>` |
+| Live overlay | pick a replay-trained model; draws its boxes and names on top of the SS14 client window while you play (`changeling14-vision replays overlay`, macOS, needs Screen Recording for Terminal) |
+| Train on replays | pick a dataset (every folder with a `dataset.json`, newest first, or Browse…) and a sprite model trained with text to start from; trains a model to find and name things in replay frames |
 
 Train, Benchmark and Export need the pipeline's extras:
 `pip install -e "$HOME/Desktop/SS13-14/changeling14-vision[train,text,export]"`

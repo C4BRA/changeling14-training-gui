@@ -58,13 +58,22 @@ class Model:
     def has_latest(self) -> bool:
         return (self.path / "latest.pt").is_file()
 
+    @property
+    def duplicates_report(self) -> Path | None:
+        """duplicates.html, which training writes when it groups identical pictures."""
+        path = self.path / "duplicates.html"
+        return path if path.is_file() else None
+
 
 def is_catalogue(path: Path) -> bool:
     return (path / "manifest.json").is_file() and (path / "catalogue" / "images.jsonl").is_file()
 
 
 def is_model(path: Path) -> bool:
-    return (path / "config.json").is_file()
+    """A sprite (stage 1) model folder. Replay models, whose config.json
+    names a "start" model and a "dataset", belong to Train on replays."""
+    cfg = _read_json(path / "config.json")
+    return (path / "config.json").is_file() and not ("start" in cfg and "dataset" in cfg)
 
 
 def read_catalogue(path: Path) -> Catalogue:

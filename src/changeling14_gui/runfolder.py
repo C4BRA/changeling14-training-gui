@@ -162,6 +162,16 @@ class RunFolder:
             return ""
         return data.decode("utf-8", errors="replace")
 
+    def failure_reason(self) -> str:
+        """The step's own last word on why it failed: its last "error:" line,
+        else the last line of output before the exit code."""
+        lines = [l.strip() for l in self.console_tail(16 * 1024).splitlines() if l.strip()]
+        lines = [l for l in lines if not l.startswith("[exit code")]
+        for line in reversed(lines):
+            if line.lower().startswith("error:") or "SystemExit" in line:
+                return line
+        return lines[-1] if lines else ""
+
     def signature(self) -> tuple:
         """Cheap change detector: mtimes and sizes of the files the app shows."""
         sig = []

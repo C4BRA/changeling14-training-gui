@@ -63,7 +63,7 @@ def test_builtin_config_loads():
     ids = [j.id for j in cfg.jobs]
     assert ids[:2] == ["demo", "sprites"]
     assert cfg.job("demo").enabled and cfg.job("train").enabled
-    assert not cfg.job("import-replays").enabled
+    assert all(cfg.job(j).enabled for j in ("import-replays", "record-replays", "build-dataset", "train-replays"))
 
 
 def test_placeholders(cfg, tmp_path):
@@ -287,8 +287,18 @@ def test_train_checks(lib, tmp_path):
     assert not forms.check_new(oxyd, str(models / "new"), "huge", "20000", "").ok
     assert forms.train_args("500", " 30 ", True, True, text=False) == [
         "--steps", "500", "--minutes", "30", "--amp", "--fresh", "--no-text"]
+    assert forms.train_args("10000", "", False, False, batch=256, optimizer="schedulefree", rich_text=True) == [
+        "--steps", "10000", "--batch", "256", "--optimizer", "schedulefree", "--rich-text"]
+    assert forms.train_args("100", "", False, False, dedup=False) == ["--steps", "100", "--no-dedup"]
+    assert forms.rescale_steps("20000", 128, 256) == "10000"
+    assert forms.rescale_steps("10000", 256, 512) == "5000"
+    assert forms.rescale_steps("5000", 512, 128) == "20000"
+    assert forms.rescale_steps("abc", 128, 256) == "abc"
 
     assert forms.check_model(model, needs_data=True).ok
+    assert model.duplicates_report is None
+    (model.path / "duplicates.html").write_text("<html></html>")
+    assert library.models()[0].duplicates_report == model.path / "duplicates.html"
     import shutil
     shutil.rmtree(wizden)
     assert not forms.check_continue(library.models()[0], "20000", "", False).ok
@@ -338,3 +348,134 @@ def test_watchset_cards(tmp_path):
     assert cards.summary(first).endswith("had 1 more in its top 5.")
     assert cards.summary(second, second) .endswith("no change since the last checkpoint.")
     assert cards.trend(cps) == [(0, 0.0, 1 / 3), (1000, 0.02, 0.1)]
+
+
+def test_replay_jobs(tmp_path):
+    from changeling14_gui import replays
+    lib, rec, models = tmp_path / "lib", tmp_path / "rec", tmp_path / "models"
+    (lib / "wizards-abc").mkdir(parents=True)
+    for name in ("salamander-x-round_115835.zip", "leviathan-y-round_115836.zip"):
+        (lib / "wizards-abc" / name).write_bytes(b"zip")
+    (lib / "replays.jsonl").write_text("".join(json.dumps({"file": f"wizards-abc/{n}", "build": "wizards-abc",
+                                                           "duration": d}) + "\n"
+                                               for n, d in (("salamander-x-round_115835.zip", 6270.0),
+                                                            ("leviathan-y-round_115836.zip", 4089.0),
+                                                            ("gone-round_1.zip", 1.0))))
+    (rec / "salamander-x-round_115835" / "frames").mkdir(parents=True)
+    for i in range(3):
+        (rec / "salamander-x-round_115835" / "frames" / f"{i}.png").write_bytes(b"")
+    for name, text in (("sprite-pretrain-nano", True), ("no-text", False)):
+        (models / name).mkdir(parents=True)
+        (models / name / "config.json").write_text("{}")
+        if text:
+            (models / name / "text.npz").write_bytes(b"")
+    cfg = config.parse({"paths": {"replay_library": str(lib), "replay_recordings": str(rec),
+                                  "replay_dataset": str(tmp_path / "ds"), "models": str(models)}})
+
+    items = replays.library_replays(cfg)
+    assert [(r.name, r.round_id, r.recorded) for r in items] == [
+        ("salamander-x-round_115835.zip", "115835", 3), ("leviathan-y-round_115836.zip", "115836", 0)]
+    assert replays.duration_text(6270.0) == "1 h 44 min"
+    assert replays.recording_rounds(cfg) == ["115835"]
+    assert replays.text_models(cfg) == [models / "sprite-pretrain-nano"]
+    (models / "replay-x").mkdir()
+    (models / "replay-x" / "config.json").write_text('{"start": "a", "dataset": "b"}')
+    (models / "replay-x" / "text.npz").write_bytes(b"")
+    assert replays.text_models(cfg) == [models / "sprite-pretrain-nano"]
+
+    src = tmp_path / "ss14"
+    (src / "RobustToolbox").mkdir(parents=True)
+    (src / ".git").mkdir()
+    assert replays.check_record(items[1], str(src), "10", "2", "")[0]
+    assert "replaces" in replays.check_record(items[0], str(src), "10", "2", "")[1]
+    assert not replays.check_record(items[1], str(tmp_path), "10", "2", "")[0]
+    assert not replays.check_record(items[1], str(src), "0", "2", "")[0]
+    assert replays.record_args("10", "2", "") == ["--interval", "10", "--players", "2"]
+    assert replays.record_args("2.5", "1", "6") == ["--interval", "2.5", "--players", "1", "--max-pictures", "6"]
+
+    assert replays.check_holdout("", ["115835", "115836"])[0]
+    assert not replays.check_holdout("115835, 115836", ["115835", "115836"])[0]
+    assert not replays.check_holdout("999", ["115835", "115836"])[0]
+    assert not replays.check_holdout("", [])[0]
+    assert replays.holdout_args(" 115836 ") == ["--holdout", "115836"] and replays.holdout_args("") == []
+
+    start = models / "sprite-pretrain-nano"
+    assert not replays.check_replay_train(start, "replay-nano", tmp_path / "ds", "6000", "8", "")[0]   # no dataset
+    assert not replays.check_replay_train(start, "replay-nano", None, "6000", "8", "")[0]
+    (tmp_path / "ds").mkdir()
+    (tmp_path / "ds" / "dataset.json").write_text("{}")
+    assert replays.check_replay_train(start, "replay-nano", tmp_path / "ds", "6000", "8", "")[0]
+    assert not replays.check_replay_train(start, "sprite-pretrain-nano", tmp_path / "ds", "6000", "8", "")[0]
+    assert replays.replay_train_args("6000", "8", "30") == ["--steps", "6000", "--batch", "8", "--minutes", "30"]
+
+
+def test_overrides_win_over_inbox_and_runs(tmp_path):
+    cfg = config.parse({"paths": {"inbox": "/a/inbox"}})
+    job = config.JobSpec("x", "x", ("--inbox", "{inbox}"))
+    assert config.expand_command(job, cfg, tmp_path, {"inbox": Path("/b/inbox")}) == ["--inbox", "/b/inbox"]
+
+
+def test_replay_datasets(tmp_path):
+    import os
+    from changeling14_gui import replays
+    legacy, named = tmp_path / "replay-dataset", tmp_path / "replay-datasets"
+    cfg = config.parse({"paths": {"replay_dataset": str(legacy), "replay_datasets": str(named)}})
+    assert replays.dataset_path(cfg, "replay-dataset") == legacy
+    assert replays.dataset_path(cfg, " zoom1 ") == named / "zoom1"
+    assert replays.check_dataset_name("bad name/") and replays.check_dataset_name("") and not replays.check_dataset_name("v2.1_x")
+
+    def make(path, frames, mtime):
+        path.mkdir(parents=True)
+        (path / "dataset.json").write_text('{"version": 1, "tile": 32, "summary": {"frames": %d, "train_frames": 3, '
+                                           '"test_frames": 1, "test_rounds": ["115836"]}, "frames": []}' % frames)
+        os.utime(path / "dataset.json", (mtime, mtime))
+    make(legacy, 1717, 1000)
+    make(named / "zoom1", 1600, 2000)
+    (named / "empty").mkdir()
+    elsewhere = tmp_path / "far" / "mine"
+    make(elsewhere, 5, 500)
+    found = replays.replay_datasets(cfg, [elsewhere])
+    assert [d.path for d in found] == [named / "zoom1", legacy, elsewhere]          # newest first
+    assert found[1].describe()[:5] == ("replay-dataset", "1,717", "3", "1", "115836")
+    assert replays.check_dataset_out(str(legacy))[1].startswith("Replaces")
+    assert replays.check_dataset_out(str(named / "new"))[0]
+    (tmp_path / "junk").mkdir()
+    (tmp_path / "junk" / "x.txt").write_text("x")
+    assert not replays.check_dataset_out(str(tmp_path / "junk"))[0]
+
+
+def test_failure_reason_and_keep_args(tmp_path):
+    from changeling14_gui import forms, replays
+    run = RunFolder(tmp_path)
+    (tmp_path / "console.log").write_text("detect: starting\n/x/replay-a was trained on the dataset in /d1, not /d2; "
+                                          "pass --allow-new-data to resume it anyway\n\n[exit code 1]\n")
+    assert run.failure_reason().startswith("/x/replay-a was trained on the dataset")
+    (tmp_path / "console.log").write_text("train: x\nerror: something broke\nmore\n[exit code 2]\n")
+    assert run.failure_reason() == "error: something broke"
+    assert forms.train_args("10", "", False, False, keep="5") == ["--steps", "10", "--keep-checkpoints", "5"]
+    assert forms.check_keep("-1") and forms.check_keep("x") and not forms.check_keep("0")
+    assert replays.replay_train_args("6000", "8", "", "0", True) == [
+        "--steps", "6000", "--batch", "8", "--keep-checkpoints", "0", "--allow-new-data"]
+
+
+def test_dataset_picker_skips_rebuild_folders(tmp_path):
+    from changeling14_gui import replays
+    named = tmp_path / "replay-datasets"
+    for n in ("audit-v2", ".audit-v2.building", ".audit-v2.previous"):
+        (named / n).mkdir(parents=True)
+        (named / n / "dataset.json").write_text('{"version": 2, "summary": {"frames": 1}}')
+    cfg = config.parse({"paths": {"replay_dataset": str(tmp_path / "replay-dataset"), "replay_datasets": str(named)}})
+    assert [d.path.name for d in replays.replay_datasets(cfg)] == ["audit-v2"]
+
+
+def test_live_overlay_models_and_args(tmp_path):
+    from changeling14_gui import replays
+    models = tmp_path / "models"
+    for name, cfgtext in (("sprite-pretrain-nano", '{"data": "x"}'), ("replay-a", '{"start": "s", "dataset": "d"}')):
+        (models / name).mkdir(parents=True)
+        (models / name / "config.json").write_text(cfgtext)
+        (models / name / "latest.pt").write_bytes(b"")
+    cfg = config.parse({"paths": {"models": str(models)}})
+    assert replays.replay_models(cfg) == [models / "replay-a"]
+    assert replays.overlay_args(True, False, "0.4") == ["--threshold", "0.4", "--floor"]
+    assert replays.overlay_args(False, True, "0.5") == ["--threshold", "0.5", "--pick"]
