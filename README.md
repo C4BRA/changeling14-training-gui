@@ -38,19 +38,25 @@ changeling14-gui
 
 ## Jobs
 
-The built-in `jobs.toml` has:
+The sidebar groups the built-in `jobs.toml` buttons (a job's `group`):
 
-| Button | Runs |
-|---|---|
-| Demo training run | a fake 60-second run that writes progress, a log and a watch set, to try the app |
-| Build sprite catalogue | M0: `changeling14-vision sprites`; opens a window to pick the codebase (SS14 checkouts next to `~/Desktop/SS13-14/wizden-ss14` are listed, or choose any folder) and the output folder. Wizden builds into `ss14-sprite-dataset`, other codebases into `ss14-sprite-dataset-<name>` |
-| Train | opens a window: continue a model (it keeps the catalogue it was started on) or start a new one on any catalogue, with size, steps, a time limit, half precision and start over. Resumes from `latest.pt`, saves a checkpoint when stopped |
-| Benchmark | pick a model and checkpoint; scores it on that model's own catalogue and writes `benchmark.md`, per-category accuracy and a mistakes gallery |
-| Export | pick a model and checkpoint to export |
-| Import replays | copies replay .zip files from the inbox into the replay library (`changeling14-vision replays import`); deleting them from the inbox is an opt-in checkbox |
-| Record replays | pick a library replay and the codebase checkout it came from; plays it in a replay client and saves pictures with answer keys (a game window opens and must stay visible) |
-| Build dataset | turns the recordings into a training dataset with optional held-out round ids. Output name `replay-dataset` is the original `~/Desktop/SS13-14/replay-dataset`; any other name goes to `~/Desktop/SS13-14/replay-datasets/<name>` |
-| Train on replays | pick a dataset (every folder with a `dataset.json`, newest first, or Browse…) and a sprite model trained with text to start from; trains a model to find and name things in replay frames |
+| Section | Button | Runs |
+|---|---|---|
+| Data | Build sprite catalogue | M0: `changeling14-vision sprites`; opens a window to pick the codebase (SS14 checkouts next to `~/Desktop/SS13-14/wizden-ss14` are listed, or choose any folder) and the output folder. Wizden builds into `ss14-sprite-dataset`, other codebases into `ss14-sprite-dataset-<name>` |
+| Data | Import replays | copies replay .zip files from the inbox into the replay library (`changeling14-vision replays import`); deleting them from the inbox is an opt-in checkbox |
+| Data | Record replays | pick a library replay and the codebase checkout it came from; plays it in a replay client and saves pictures with answer keys (a game window opens and must stay visible). Recording a replay again asks first |
+| Data | Build replay dataset | turns the recordings into a training dataset with optional held-out round ids, in `~/Desktop/SS13-14/replay-datasets/<name>`. The suggested name is always a new one; typing an existing dataset's name rebuilds it after asking |
+| Train | Train sprite model | opens a window: continue a model (it keeps the catalogue it was started on) or start a new one on any catalogue, with size, steps, a time limit, half precision and start over (asks first). Resumes from `latest.pt`, saves a checkpoint when stopped |
+| Train | Train on replays | pick a sprite model trained with text to start from and a dataset (every folder with a `dataset.json`, newest first, or **Add dataset…**); trains a model to find and name things in replay frames |
+| Evaluate and export | Benchmark model | pick a model and checkpoint; scores it on that model's own catalogue and writes `benchmark.md`, per-category accuracy and a mistakes gallery |
+| Evaluate and export | Export model | pick a model and checkpoint to export |
+| Evaluate and export | Open live overlay | switches to the Live overlay tab |
+| Folders | Open replay inbox / models folder / runs folder | opens it in Finder |
+| Tools | Run demo training | a fake 60-second run that writes progress, a log and a watch set, to try the app |
+
+Point at a button to see what it does in the line under the sidebar. Heavy
+jobs queue behind a running one instead of being greyed out. Cmd-1 and Cmd-2
+switch between the Training and Live overlay tabs.
 
 Train, Benchmark and Export need the pipeline's extras:
 `pip install -e "$HOME/Desktop/SS13-14/changeling14-vision[train,text,export]"`
@@ -60,7 +66,14 @@ Train, Benchmark and Export need the pipeline's extras:
 The pickers list the sprite catalogues (folders with `manifest.json`) beside
 `ss14-sprite-dataset` and the models (folders with `config.json`) in
 `changeling14-models`, read fresh from disk each time. Folders added with
-**Add catalogue…** or **Add model…** are remembered in `~/.changeling14/library.json`.
+**Add catalogue…**, **Add model…** or **Add dataset…** are remembered in
+`~/.changeling14/library.json`.
+
+Every list has a **Refresh** button (or Cmd-R) as the first button beside
+it: it reads the folders again and drops remembered folders that were deleted
+or moved, saying how many. The same clean-up runs whenever a window opens. It
+only edits the list; files on disk are never deleted. Double-click a row, or
+press Return, for the window's main button; Escape cancels.
 
 To change paths or add jobs, copy `src/changeling14_gui/jobs.toml` to
 `~/.changeling14/gui.toml` and edit it, or pass `--config FILE`.

@@ -2,9 +2,10 @@
 windows.
 
 Both lists are read from the folders themselves, so a deleted folder simply
-drops off. Folders added through "Add…" are remembered in
-~/.changeling14/library.json. No torch here: a model is described from its
-config.json and metrics.jsonl.
+drops off. Folders added through "Add…" (catalogues, models, replay
+datasets) are remembered in ~/.changeling14/library.json; prune() forgets the
+ones that are gone. It only ever edits that list, never the folders. No torch
+here: a model is described from its config.json and metrics.jsonl.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from .config import Config
 
 STORE = Path("~/.changeling14/library.json")
 SIZES = ("nano", "tiny", "small", "base")
+KINDS = ("catalogues", "models", "datasets")
 MODEL_PREFIX = "sprite-pretrain"
 
 
@@ -122,17 +124,35 @@ class Library:
 
     def _remembered(self) -> dict:
         data = _read_json(self.store)
-        return {kind: [Path(p) for p in data.get(kind, []) if isinstance(p, str)]
-                for kind in ("catalogues", "models")}
+        return {kind: [Path(p) for p in data.get(kind, []) if isinstance(p, str)] for kind in KINDS}
 
-    def remember(self, kind: str, path: Path) -> None:
-        data = {k: [str(p) for p in v] for k, v in self._remembered().items()}
-        if str(path) not in data[kind]:
-            data[kind].append(str(path))
+    def remembered(self, kind: str) -> list[Path]:
+        return self._remembered()[kind]
+
+    def _write(self, data: dict[str, list[Path]]) -> None:
         self.store.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.store.with_name(self.store.name + ".tmp")
-        tmp.write_text(json.dumps(data, indent=2))
+        tmp.write_text(json.dumps({k: [str(p) for p in v] for k, v in data.items()}, indent=2))
         tmp.replace(self.store)
+
+    def remember(self, kind: str, path: Path) -> None:
+        data = self._remembered()
+        if path not in data[kind]:
+            data[kind].append(path)
+        self._write(data)
+
+    def prune(self) -> dict[str, list[Path]]:
+        """Forget remembered folders that are gone, or are no longer a
+        catalogue / model / dataset. Returns what was forgotten, per kind.
+        Only the list in library.json changes; nothing on disk is deleted."""
+        from .replays import is_dataset
+
+        valid = {"catalogues": is_catalogue, "models": is_model, "datasets": is_dataset}
+        data = self._remembered()
+        removed = {k: [p for p in v if not valid[k](p)] for k, v in data.items()}
+        if any(removed.values()):
+            self._write({k: [p for p in v if p not in removed[k]] for k, v in data.items()})
+        return {k: v for k, v in removed.items() if v}
 
     # Discovery -----------------------------------------------------------
 

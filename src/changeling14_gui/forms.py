@@ -12,7 +12,7 @@ import sys
 import tkinter as tk
 from dataclasses import dataclass
 from pathlib import Path
-from tkinter import filedialog, ttk
+from tkinter import filedialog, messagebox, ttk
 
 from . import codebases
 from .config import Config, JobSpec
@@ -20,6 +20,8 @@ from .library import (SIZES, Catalogue, Library, Model, checkpoint_step, find_ca
                       find_model_root, is_catalogue, is_model)
 
 ERROR = "#b00020"
+MUTED = "#888888"       # secondary text; readable on both the light and the dark look
+MOD = "Command" if sys.platform == "darwin" else "Control"
 FormResult = tuple[dict[str, Path | str], list[str]]
 
 
@@ -192,6 +194,36 @@ def _report_state(button, model: Model | None) -> None:
     button.state(["!disabled"] if model and model.duplicates_report else ["disabled"])
 
 
+def history_note(found: str, removed: dict[str, list[Path]]) -> str:
+    """What a Refresh found, and what it dropped from the remembered list."""
+    gone = sum(len(v) for v in removed.values())
+    if not gone:
+        return f"Refreshed: {found}."
+    names = ", ".join(p.name for v in removed.values() for p in v[:3])
+    return (f"Refreshed: {found}. Removed {gone} missing folder{'s' if gone != 1 else ''} from the list "
+            f"({names}{'…' if gone > 3 else ''}); nothing on disk was deleted.")
+
+
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
+def side_buttons(parent, buttons: list[tuple[str, object, str]]) -> dict[str, ttk.Button]:
+    """The column of buttons beside a list: Refresh first, then add/choose,
+    then the rest, all the same width. buttons: (text, command, tooltip)."""
+    out = {}
+    for i, (text, command, tip) in enumerate(buttons):
+        b = ttk.Button(parent, text=text, command=command, width=18)
+        b.pack(fill="x", pady=(0 if i == 0 else 4, 0))
+        if tip:
+            _Tooltip(b, tip)
+        out[text] = b
+    return out
+
+
+REFRESH_TIP = "Look at the folders again, and drop folders that were deleted or moved from the list. Files are never deleted."
+
+
 def _set_enabled(widget, on: bool) -> None:
     """Enable or grey out a frame's widgets, nested ones included."""
     for child in widget.winfo_children():
@@ -242,23 +274,41 @@ class _Window:
         self.body = ttk.Frame(top, padding=12)
         self.body.pack(fill="both", expand=True)
         self.body.columnconfigure(0, weight=1)
+        # Remembered folders that were deleted or moved are dropped from the lists on open.
+        self.pruned = self.library.prune()
+        top.bind(f"<{MOD}-r>", lambda _e: self.reload())
 
     def _footer(self, row: int, ok_text: str) -> None:
         self.message = ttk.Label(self.body, text="", wraplength=640, justify="left")
         self.message.grid(row=row, column=0, columnspan=2, sticky="w", pady=(10, 0))
-        self.note = ttk.Label(self.body, text="", wraplength=640, justify="left", foreground="#666")
+        self.note = ttk.Label(self.body, text="", wraplength=640, justify="left", foreground=MUTED)
         self.note.grid(row=row + 1, column=0, columnspan=2, sticky="w")
+        self.history = ttk.Label(self.body, text="", wraplength=640, justify="left", foreground=MUTED)
+        self.history.grid(row=row + 2, column=0, columnspan=2, sticky="w")
+        if self.pruned:
+            self.history.configure(text=history_note("on open", self.pruned).replace("Refreshed: on open. ", ""))
         buttons = ttk.Frame(self.body)
-        buttons.grid(row=row + 2, column=0, columnspan=2, sticky="e", pady=(12, 0))
+        buttons.grid(row=row + 3, column=0, columnspan=2, sticky="e", pady=(12, 0))
         ttk.Button(buttons, text="Cancel", command=self.cancel).pack(side="left")
         self.ok_btn = ttk.Button(buttons, text=ok_text, command=self.ok, default="active")
         self.ok_btn.pack(side="left", padx=(8, 0))
         self.top.bind("<Return>", lambda _e: self.ok())
+        # Double-clicking a row in any list does the same as the main button.
+        stack = list(self.body.winfo_children())
+        while stack:
+            w = stack.pop()
+            stack.extend(w.winfo_children())
+            if isinstance(w, ttk.Treeview):
+                w.bind("<Double-Button-1>", lambda _e: self.ok())
 
     def _show(self, check: Check, note: str = "") -> None:
         self.message.configure(text=check.message, foreground="" if check.ok else ERROR)
         self.ok_btn.state(["!disabled"] if check.ok else ["disabled"])
         self.note.configure(text=note)
+
+    def confirm(self, title: str, message: str) -> bool:
+        """Asked before a job replaces something already on disk."""
+        return messagebox.askyesno(title, message, icon="warning", default="no", parent=self.top)
 
     def _ask_folder(self, title: str, start: Path | None) -> Path | None:
         start = start if start and start.is_dir() else Path.home()
@@ -284,6 +334,21 @@ class _Window:
             return None
         self.library.remember("models", root)
         return root
+
+    def reload(self) -> None:
+        """Refresh: read the lists from disk again (Cmd/Ctrl-R)."""
+        removed = self.library.prune()
+        self.history.configure(text=history_note(self.reload_lists(), removed))
+        self.refresh_after_reload()
+
+    def reload_lists(self) -> str:
+        """Re-read this window's lists; returns what was found, e.g. "3 models"."""
+        return "nothing to refresh"
+
+    def refresh_after_reload(self) -> None:
+        refresh = getattr(self, "refresh", None)
+        if callable(refresh):
+            refresh()
 
     def wait(self) -> FormResult | None:
         self.top.grab_set()
@@ -322,9 +387,11 @@ class SpriteCatalogueWindow(_Window):
             self.repo_list.insert("end", "No SS14 checkouts found; choose a folder")
         self.repo_list.bind("<<ListboxSelect>>", self.on_list_select)
         self.repo_list.bind("<Double-Button-1>", lambda _e: self.ok())
-        ttk.Button(body, text="Choose folder…", command=self.choose_repo).grid(row=1, column=1, sticky="n",
-                                                                              padx=(8, 0), pady=(4, 0))
-        self.repo_label = ttk.Label(body, text="", foreground="#666")
+        side = ttk.Frame(body)
+        side.grid(row=1, column=1, sticky="n", padx=(8, 0), pady=(4, 0))
+        side_buttons(side, [("Refresh", self.reload, REFRESH_TIP),
+                            ("Choose folder…", self.choose_repo, "Any SS14 checkout, or a folder inside one.")])
+        self.repo_label = ttk.Label(body, text="", foreground=MUTED)
         self.repo_label.grid(row=2, column=0, columnspan=2, sticky="w", pady=(2, 10))
 
         ttk.Label(body, text="Output folder").grid(row=3, column=0, columnspan=2, sticky="w")
@@ -341,6 +408,17 @@ class SpriteCatalogueWindow(_Window):
             self.set_repo(self.checkouts[0])
         else:
             self.refresh()
+
+    def reload_lists(self) -> str:
+        self.checkouts = codebases.find_checkouts(self.cfg)
+        self.repo_list.delete(0, "end")
+        for path in self.checkouts:
+            self.repo_list.insert("end", f"{path.name}    {path}")
+        if not self.checkouts:
+            self.repo_list.insert("end", "No SS14 checkouts found; choose a folder")
+        if self.repo in self.checkouts:
+            self.repo_list.selection_set(self.checkouts.index(self.repo))
+        return _plural(len(self.checkouts), "checkout")
 
     def on_list_select(self, _event=None) -> None:
         sel = self.repo_list.curselection()
@@ -414,10 +492,12 @@ class TrainWindow(_Window):
         self.model_tree.bind("<<TreeviewSelect>>", lambda _e: self.on_model())
         side = ttk.Frame(cont)
         side.grid(row=0, column=1, sticky="n", padx=(8, 0))
-        ttk.Button(side, text="Add model…", command=self.add_model).pack(fill="x")
-        self.dup_btn = ttk.Button(side, text="Duplicates report",
-                                  command=lambda: _open_report(self._selected(self.model_tree, self.models)))
-        self.dup_btn.pack(fill="x", pady=(4, 0))
+        self.dup_btn = side_buttons(side, [
+            ("Refresh", self.reload, REFRESH_TIP),
+            ("Add model…", self.add_model, "A model folder somewhere else; it is remembered."),
+            ("Duplicates report", lambda: _open_report(self._selected(self.model_tree, self.models)),
+             "The identical pictures training counted once (duplicates.html)."),
+        ])["Duplicates report"]
 
         ttk.Radiobutton(body, text="New model", variable=self.mode, value="new",
                         command=self.on_mode).grid(row=2, column=0, sticky="w")
@@ -427,8 +507,11 @@ class TrainWindow(_Window):
         self.cat_tree = _tree(new, CATALOGUE_COLUMNS, height=min(6, max(2, len(self.catalogues))))
         self.cat_tree.grid(row=0, column=0, columnspan=4, sticky="ew")
         self.cat_tree.bind("<<TreeviewSelect>>", lambda _e: self.on_catalogue())
-        ttk.Button(new, text="Add catalogue…", command=self.add_catalogue).grid(row=0, column=4, sticky="n",
-                                                                                padx=(8, 0))
+        cat_side = ttk.Frame(new)
+        cat_side.grid(row=0, column=4, sticky="n", padx=(8, 0))
+        side_buttons(cat_side, [("Refresh", self.reload, REFRESH_TIP),
+                                ("Add catalogue…", self.add_catalogue,
+                                 "A sprite catalogue folder somewhere else; it is remembered.")])
         sizes = ttk.Frame(new)
         sizes.grid(row=1, column=0, columnspan=5, sticky="ew", pady=(6, 0))
         sizes.columnconfigure(3, weight=1)
@@ -507,6 +590,14 @@ class TrainWindow(_Window):
         index = next((i for i, c in enumerate(self.catalogues) if c.path == select), 0 if self.catalogues else None)
         if index is not None:
             self.cat_tree.selection_set(str(index))
+
+    def reload_lists(self) -> str:
+        model, cat = self._selected(self.model_tree, self.models), self._selected(self.cat_tree, self.catalogues)
+        self.models, self.catalogues = self.library.models(), self.library.catalogues()
+        self._fill_models(self.model_tree, self.models, model.path if model else None)
+        self._fill_catalogues(cat.path if cat else None)
+        self.on_mode()
+        return f"{_plural(len(self.models), 'model')}, {_plural(len(self.catalogues), 'catalogue')}"
 
     def on_mode(self) -> None:
         cont = self.mode.get() == "continue"
@@ -593,6 +684,10 @@ class TrainWindow(_Window):
         steps, minutes, amp = self.steps.get(), self.minutes.get(), self.amp.get()
         if self.mode.get() == "continue":
             model = self._selected(self.model_tree, self.models)
+            if self.fresh.get() and not self.confirm(
+                    "Start over", f"Start {model.path.name} over from step 0? Its latest weights are replaced as it "
+                                  "trains; the checkpoints already saved stay in checkpoints/."):
+                return
             overrides = {"model_dir": model.path, "sprite_dataset": model.catalogue, "size": model.size}
             extra = train_args(steps, minutes, amp, self.fresh.get(), model.text, keep=self.keep.get())
         else:
@@ -621,9 +716,12 @@ class ModelWindow(_Window):
         self.tree.bind("<<TreeviewSelect>>", lambda _e: self.on_model())
         side = ttk.Frame(body)
         side.grid(row=1, column=1, sticky="n", padx=(8, 0))
-        ttk.Button(side, text="Add model…", command=self.add_model).pack(fill="x")
-        self.dup_btn = ttk.Button(side, text="Duplicates report", command=lambda: _open_report(self.selected()))
-        self.dup_btn.pack(fill="x", pady=(4, 0))
+        self.dup_btn = side_buttons(side, [
+            ("Refresh", self.reload, REFRESH_TIP),
+            ("Add model…", self.add_model, "A model folder somewhere else; it is remembered."),
+            ("Duplicates report", lambda: _open_report(self.selected()),
+             "The identical pictures training counted once (duplicates.html)."),
+        ])["Duplicates report"]
 
         row = ttk.Frame(body)
         row.grid(row=2, column=0, columnspan=2, sticky="w", pady=(10, 0))
@@ -639,6 +737,16 @@ class ModelWindow(_Window):
     def selected(self) -> Model | None:
         sel = self.tree.selection()
         return self.models[int(sel[0])] if sel and int(sel[0]) < len(self.models) else None
+
+    def reload_lists(self) -> str:
+        model = self.selected()
+        self.models = self.library.models()
+        self._fill_models(self.tree, self.models, model.path if model else None)
+        self.on_model()
+        return _plural(len(self.models), "model") + " (checkpoints re-read)"
+
+    def refresh_after_reload(self) -> None:
+        pass
 
     def on_model(self) -> None:
         model = self.selected()

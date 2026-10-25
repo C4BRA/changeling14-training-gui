@@ -420,8 +420,10 @@ def test_replay_datasets(tmp_path):
     from changeling14_gui import replays
     legacy, named = tmp_path / "replay-dataset", tmp_path / "replay-datasets"
     cfg = config.parse({"paths": {"replay_dataset": str(legacy), "replay_datasets": str(named)}})
-    assert replays.dataset_path(cfg, "replay-dataset") == legacy
+    # The old top-level replay-dataset folder is used only while it holds a dataset.
+    assert replays.dataset_path(cfg, "replay-dataset") == named / "replay-dataset"
     assert replays.dataset_path(cfg, " zoom1 ") == named / "zoom1"
+    assert replays.default_dataset_name(cfg) == "replay-dataset"
     assert replays.check_dataset_name("bad name/") and replays.check_dataset_name("") and not replays.check_dataset_name("v2.1_x")
 
     def make(path, frames, mtime):
@@ -430,6 +432,8 @@ def test_replay_datasets(tmp_path):
                                            '"test_frames": 1, "test_rounds": ["115836"]}, "frames": []}' % frames)
         os.utime(path / "dataset.json", (mtime, mtime))
     make(legacy, 1717, 1000)
+    assert replays.dataset_path(cfg, "replay-dataset") == legacy
+    assert replays.default_dataset_name(cfg) == "replay-dataset-2"     # never replaces one by default
     make(named / "zoom1", 1600, 2000)
     (named / "empty").mkdir()
     elsewhere = tmp_path / "far" / "mine"
@@ -502,3 +506,60 @@ def test_live_overlay_page_helpers(tmp_path):
     assert "24.5 fps on Neural Engine" in overlay_page.status_text(s) and "model 4" in overlay_page.status_text(s)
     assert "not found" in overlay_page.status_text({"window": False})
     assert overlay_page.parse_status("overlay: hello") is None
+
+
+def test_refresh_prunes_only_the_remembered_list(tmp_path):
+    from changeling14_gui import forms, library, replays
+    store = tmp_path / "library.json"
+    cfg = config.parse({"paths": {"models": str(tmp_path / "models"), "sprite_dataset": str(tmp_path / "cat"),
+                                  "replay_dataset": str(tmp_path / "replay-dataset"),
+                                  "replay_datasets": str(tmp_path / "replay-datasets")}})
+    lib = library.Library(cfg, store)
+    model, gone_model = tmp_path / "far" / "m1", tmp_path / "far" / "m2"
+    for m in (model, gone_model):
+        m.mkdir(parents=True)
+        (m / "config.json").write_text('{"size": "nano", "data": "x"}')
+    cat = tmp_path / "far" / "cat"
+    (cat / "catalogue").mkdir(parents=True)
+    (cat / "manifest.json").write_text("{}")
+    (cat / "catalogue" / "images.jsonl").write_text("")
+    ds, gone_ds = tmp_path / "far" / "ds", tmp_path / "far" / "ds-old"
+    for d in (ds, gone_ds):
+        d.mkdir(parents=True)
+        (d / "dataset.json").write_text('{"summary": {"frames": 3}}')
+    for kind, path in (("models", model), ("models", gone_model), ("catalogues", cat), ("datasets", ds),
+                       ("datasets", gone_ds)):
+        lib.remember(kind, path)
+    lib.remember("models", model)                                     # remembered once
+    assert lib.remembered("models") == [model, gone_model]
+    assert lib.prune() == {}                                          # nothing gone yet
+    # Deleted outside the app: one model and one dataset folder; another model folder emptied.
+    import shutil
+    shutil.rmtree(gone_model)
+    shutil.rmtree(gone_ds)
+    (model / "config.json").unlink()
+    removed = lib.prune()
+    assert removed == {"models": [model, gone_model], "datasets": [gone_ds]}
+    assert lib.remembered("models") == [] and lib.remembered("datasets") == [ds] and lib.remembered("catalogues") == [cat]
+    assert model.is_dir() and ds.is_dir() and cat.is_dir()            # nothing on disk was touched
+    assert lib.prune() == {}
+    assert [d.path for d in replays.replay_datasets(cfg, lib.remembered("datasets"))] == [ds]
+    note = forms.history_note("1 model", {"models": [gone_model]})
+    assert "Removed 1 missing folder" in note and "m2" in note and "nothing on disk was deleted" in note
+    assert forms.history_note("2 models", {}) == "Refreshed: 2 models."
+
+
+def test_sidebar_groups_and_missing_library_files(tmp_path):
+    from changeling14_gui import app, replays
+    cfg = config.parse(__import__("tomllib").loads(
+        (Path(__file__).parent.parent / "src/changeling14_gui/jobs.toml").read_text()))
+    groups = app.job_groups(cfg.jobs)
+    assert [g for g, _ in groups] == ["Data", "Train", "Evaluate and export", "Tools"]
+    assert [j.label for j in dict(groups)["Train"]] == ["Train sprite model", "Train on replays"]
+    lib = tmp_path / "lib"
+    (lib / "b").mkdir(parents=True)
+    (lib / "b" / "here.zip").write_bytes(b"")
+    (lib / "replays.jsonl").write_text('{"file": "b/here.zip"}\n{"file": "b/gone.zip"}\nnot json\n')
+    cfg2 = config.parse({"paths": {"replay_library": str(lib), "replay_recordings": str(tmp_path / "rec")}})
+    assert [r.file for r in replays.library_replays(cfg2)] == ["b/here.zip"]
+    assert replays.missing_library_files(cfg2) == 1

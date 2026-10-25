@@ -73,6 +73,24 @@ def library_replays(cfg: Config) -> list[Replay]:
     return found
 
 
+def missing_library_files(cfg: Config) -> int:
+    """Entries in the library's replays.jsonl whose .zip is no longer there
+    (they aren't listed; the index itself is left alone)."""
+    library = cfg.paths["replay_library"]
+    try:
+        lines = (library / LIBRARY_INDEX).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return 0
+    n = 0
+    for line in lines:
+        try:
+            file = str(json.loads(line).get("file") or "")
+        except (ValueError, AttributeError):
+            continue
+        n += bool(file) and not (library / file).is_file()
+    return n
+
+
 def inbox_zips(inbox: Path) -> list[Path]:
     try:
         return sorted(p for p in inbox.glob("*.zip") if p.is_file())
@@ -136,12 +154,23 @@ def datasets_dir(cfg: Config) -> Path:
 
 
 def dataset_path(cfg: Config, name: str) -> Path:
-    """Output name -> folder. The default name is the original replay-dataset
-    folder, so existing datasets keep working; any other name goes under
-    replay-datasets/."""
+    """Output name -> folder: replay-datasets/<name>, except the original
+    replay-dataset folder while it still exists, so an old dataset there
+    keeps working."""
     name = name.strip()
     legacy = cfg.paths["replay_dataset"]
-    return legacy if name == legacy.name else datasets_dir(cfg) / name
+    return legacy if name == legacy.name and is_dataset(legacy) else datasets_dir(cfg) / name
+
+
+def default_dataset_name(cfg: Config) -> str:
+    """A name no dataset has yet (replay-dataset, replay-dataset-2, ...), so
+    building with the defaults never replaces an existing dataset."""
+    base = cfg.paths["replay_dataset"].name
+    name, n = base, 1
+    while dataset_path(cfg, name).exists():
+        n += 1
+        name = f"{base}-{n}"
+    return name
 
 
 def replay_datasets(cfg: Config, extra: list[Path] = ()) -> list[ReplayDataset]:

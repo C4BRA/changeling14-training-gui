@@ -11,7 +11,8 @@ from pathlib import Path
 from tkinter import ttk
 
 from . import replays
-from .forms import Check, _Tooltip, _tree, _Window
+from .forms import REFRESH_TIP, Check, _plural, _Tooltip, _tree, _Window, side_buttons
+from .library import read_model
 
 RECORD_NOTE = "A game window opens and must stay visible; one job at a time."
 DELETE_TIP = "Off: the inbox keeps its .zip files. On: each one is deleted once its copy in the library is checked."
@@ -20,6 +21,7 @@ DATASET_COLUMNS = (("dataset", "Dataset", 200), ("frames", "Frames", 65), ("trai
                    ("test", "Test", 65), ("held", "Test rounds", 110), ("built", "Built", 120))
 REPLAY_COLUMNS = (("replay", "Replay", 300), ("build", "Build", 170), ("length", "Length", 80),
                   ("recorded", "Recorded", 90))
+START_COLUMNS = (("model", "Model", 260), ("size", "Size", 60), ("step", "Step", 90))
 
 
 def _row(form, row: int, label: str, var: tk.StringVar, width: int = 8, tip: str = "") -> ttk.Entry:
@@ -68,8 +70,14 @@ class ImportReplaysWindow(_ReplayWindow):
         box = ttk.Checkbutton(self.body, text="Delete from inbox after import", variable=self.remove)
         box.grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 0))
         _Tooltip(box, DELETE_TIP)
+        ttk.Button(self.body, text="Refresh", command=self.reload, width=18).grid(row=4, column=1, sticky="e",
+                                                                                pady=(8, 0))
         self._footer(5, "Import")
         self.refresh()
+
+    def reload_lists(self) -> str:
+        zips = replays.inbox_zips(Path(self.inbox.get().strip()).expanduser())
+        return _plural(len(zips), "replay") + " in the inbox"
 
     def refresh(self) -> None:
         if not hasattr(self, "ok_btn"):
@@ -105,13 +113,11 @@ class RecordReplaysWindow(_ReplayWindow):
         body = self.body
         ttk.Label(body, text="Replay").grid(row=0, column=0, sticky="w")
         self.tree = _tree(body, REPLAY_COLUMNS, height=min(8, max(3, len(self.items))))
-        self.tree.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(4, 0))
-        for i, r in enumerate(self.items):
-            self.tree.insert("", "end", iid=str(i), values=(r.name, r.build, replays.duration_text(r.duration),
-                                                            f"{r.recorded:,}" if r.recorded else "–"))
-        first_new = next((i for i, r in enumerate(self.items) if not r.recorded), 0)
-        if self.items:
-            self.tree.selection_set(str(first_new))
+        self.tree.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        side = ttk.Frame(body)
+        side.grid(row=1, column=1, sticky="n", padx=(8, 0), pady=(4, 0))
+        side_buttons(side, [("Refresh", self.reload, REFRESH_TIP + " Import replays adds new ones.")])
+        self._fill_replays(None)
         self.tree.bind("<<TreeviewSelect>>", lambda _e: self.refresh())
 
         self.source = tk.StringVar(value=str(cfg.paths.get("wizden", Path.home())))
@@ -128,6 +134,26 @@ class RecordReplaysWindow(_ReplayWindow):
         self._footer(5, "Record")
         self.refresh()
 
+    def _fill_replays(self, select: str | None) -> None:
+        self.tree.delete(*self.tree.get_children())
+        for i, r in enumerate(self.items):
+            self.tree.insert("", "end", iid=str(i), values=(r.name, r.build, replays.duration_text(r.duration),
+                                                            f"{r.recorded:,}" if r.recorded else "–"))
+        index = next((i for i, r in enumerate(self.items) if r.file == select), None)
+        if index is None:
+            index = next((i for i, r in enumerate(self.items) if not r.recorded), 0)
+        if self.items:
+            self.tree.selection_set(str(index))
+            self.tree.see(str(index))
+
+    def reload_lists(self) -> str:
+        current = self.selected()
+        self.items = replays.library_replays(self.cfg)
+        self._fill_replays(current.file if current else None)
+        missing = replays.missing_library_files(self.cfg)
+        return _plural(len(self.items), "replay") + (
+            f" ({_plural(missing, 'library entry')} whose .zip is gone, not shown)" if missing else "")
+
     def selected(self) -> replays.Replay | None:
         sel = self.tree.selection()
         return self.items[int(sel[0])] if sel and int(sel[0]) < len(self.items) else None
@@ -143,6 +169,10 @@ class RecordReplaysWindow(_ReplayWindow):
         if not replays.check_record(replay, self.source.get(), self.interval.get(), self.players.get(),
                                     self.max_pictures.get())[0]:
             return
+        if replay.recorded and not self.confirm(
+                "Record again", f"{replay.name} already has {replay.recorded:,} pictures. Recording it again "
+                                "replaces them. Continue?"):
+            return
         overrides = {"replay": replay.file, "wizden": Path(self.source.get().strip()).expanduser()}
         self.result = (overrides, replays.record_args(self.interval.get(), self.players.get(),
                                                       self.max_pictures.get()))
@@ -156,19 +186,30 @@ class BuildDatasetWindow(_ReplayWindow):
         super().__init__(parent, cfg, job, busy)
         self.top.resizable(True, False)
         self.rounds = replays.recording_rounds(cfg)
-        recorded = ", ".join(self.rounds) or "none yet"
-        ttk.Label(self.body, text=f"Recorded rounds: {recorded}").grid(row=0, column=0, columnspan=2, sticky="w")
+        self.rounds_label = ttk.Label(self.body, text=self._rounds_text(), wraplength=520, justify="left")
+        self.rounds_label.grid(row=0, column=0, sticky="w")
+        ttk.Button(self.body, text="Refresh", command=self.reload, width=18).grid(row=0, column=1, sticky="ne",
+                                                                                padx=(8, 0))
         form = ttk.Frame(self.body)
         form.grid(row=1, column=0, columnspan=2, sticky="w", pady=(8, 0))
         self.holdout = tk.StringVar()
         _row(form, 0, "Held-out round ids", self.holdout, width=24, tip=HOLDOUT_TIP)
         self.holdout.trace_add("write", lambda *_a: self.refresh())
-        self.name = tk.StringVar(value=cfg.paths["replay_dataset"].name)
+        self.name = tk.StringVar(value=replays.default_dataset_name(cfg))
         _row(form, 1, "Output name", self.name, width=24,
-             tip=f"replay-dataset is the original folder; any other name goes in {replays.datasets_dir(cfg)}.")
+             tip=f"A folder in {replays.datasets_dir(cfg)}. Type an existing dataset's name to rebuild it "
+                 "(the old one is kept as .<name>.previous until the next rebuild).")
         self.name.trace_add("write", lambda *_a: self.refresh())
         self._footer(2, "Build")
         self.refresh()
+
+    def _rounds_text(self) -> str:
+        return f"Recorded rounds: {', '.join(self.rounds) or 'none yet'}"
+
+    def reload_lists(self) -> str:
+        self.rounds = replays.recording_rounds(self.cfg)
+        self.rounds_label.configure(text=self._rounds_text())
+        return _plural(len(self.rounds), "recorded round")
 
     def out(self) -> Path:
         return replays.dataset_path(self.cfg, self.name.get())
@@ -191,6 +232,10 @@ class BuildDatasetWindow(_ReplayWindow):
     def ok(self) -> None:
         if not self.check()[0]:
             return
+        if replays.is_dataset(self.out()) and not self.confirm(
+                "Rebuild dataset", f"Rebuild {self.out().name}? The current one is kept as .{self.out().name}.previous "
+                                   "until the next rebuild."):
+            return
         self.result = ({"replay_dataset": self.out()},
                        replays.holdout_args(self.holdout.get()))
         self.top.destroy()
@@ -204,21 +249,22 @@ class TrainReplaysWindow(_ReplayWindow):
         self.models = replays.text_models(cfg)
         body = self.body
         ttk.Label(body, text="Start from (sprite models trained with text)").grid(row=0, column=0, sticky="w")
-        self.start_list = tk.Listbox(body, height=min(6, max(3, len(self.models))), width=60,
-                                     activestyle="none", exportselection=False)
-        self.start_list.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(4, 0))
-        for m in self.models:
-            self.start_list.insert("end", m.name)
-        if not self.models:
-            self.start_list.insert("end", "No sprite model with text.npz in the models folder")
-        self.start_list.bind("<<ListboxSelect>>", lambda _e: self.on_start())
+        self.start_tree = _tree(body, START_COLUMNS, height=min(6, max(3, len(self.models))))
+        self.start_tree.grid(row=1, column=0, sticky="ew", pady=(4, 0))
+        self.start_tree.bind("<<TreeviewSelect>>", lambda _e: self.on_start())
+        side = ttk.Frame(body)
+        side.grid(row=1, column=1, sticky="n", padx=(8, 0), pady=(4, 0))
+        side_buttons(side, [("Refresh", self.reload, REFRESH_TIP)])
         ttk.Label(body, text="Dataset").grid(row=2, column=0, sticky="w", pady=(8, 0))
-        self.datasets = replays.replay_datasets(cfg)
+        self.datasets = replays.replay_datasets(cfg, self.library.remembered("datasets"))
         self.ds_tree = _tree(body, DATASET_COLUMNS, height=min(5, max(2, len(self.datasets))))
         self.ds_tree.grid(row=3, column=0, sticky="ew", pady=(4, 0))
         self.ds_tree.bind("<<TreeviewSelect>>", lambda _e: self.refresh())
-        ttk.Button(body, text="Browse…", command=self.add_dataset).grid(row=3, column=1, sticky="n", padx=(8, 0),
-                                                                             pady=(4, 0))
+        ds_side = ttk.Frame(body)
+        ds_side.grid(row=3, column=1, sticky="n", padx=(8, 0), pady=(4, 0))
+        side_buttons(ds_side, [("Refresh", self.reload, REFRESH_TIP),
+                               ("Add dataset…", self.add_dataset,
+                                "A replay dataset folder somewhere else; it is remembered.")])
         self._fill_datasets(None)     # newest first, so the newest is preselected
         form = ttk.Frame(body)
         form.grid(row=4, column=0, columnspan=2, sticky="w", pady=(8, 0))
@@ -242,13 +288,30 @@ class TrainReplaysWindow(_ReplayWindow):
         for var in (self.name, self.steps, self.batch, self.minutes, self.keep):
             var.trace_add("write", lambda *_a: self.refresh())
         self._footer(5, "Train")
-        if self.models:
-            self.start_list.selection_set(0)
+        self._fill_start(None)
         self.on_start()
 
+    def _fill_start(self, select: Path | None) -> None:
+        self.start_tree.delete(*self.start_tree.get_children())
+        for i, m in enumerate(self.models):
+            model = read_model(m)
+            self.start_tree.insert("", "end", iid=str(i),
+                                   values=(m.name, model.size, f"{model.step:,}" if model.step is not None else "?"))
+        index = next((i for i, m in enumerate(self.models) if m == select), 0 if self.models else None)
+        if index is not None:
+            self.start_tree.selection_set(str(index))
+
     def selected(self) -> Path | None:
-        sel = self.start_list.curselection()
-        return self.models[sel[0]] if sel and sel[0] < len(self.models) else None
+        sel = self.start_tree.selection()
+        return self.models[int(sel[0])] if sel and int(sel[0]) < len(self.models) else None
+
+    def reload_lists(self) -> str:
+        start, ds = self.selected(), self.dataset()
+        self.models = replays.text_models(self.cfg)
+        self.datasets = replays.replay_datasets(self.cfg, self.library.remembered("datasets"))
+        self._fill_start(start)
+        self._fill_datasets(ds)
+        return f"{_plural(len(self.models), 'start model')}, {_plural(len(self.datasets), 'dataset')}"
 
     def _fill_datasets(self, select: Path | None) -> None:
         self.ds_tree.delete(*self.ds_tree.get_children())
@@ -269,7 +332,8 @@ class TrainReplaysWindow(_ReplayWindow):
         if not replays.is_dataset(picked):
             self._show2((False, f"{picked} is not a replay dataset (no dataset.json)."))
             return
-        self.datasets = replays.replay_datasets(self.cfg, [d.path for d in self.datasets] + [picked])
+        self.library.remember("datasets", picked)
+        self.datasets = replays.replay_datasets(self.cfg, self.library.remembered("datasets"))
         self._fill_datasets(picked)
         self.refresh()
 

@@ -20,6 +20,7 @@ class JobSpec:
     heavy: bool = True
     description: str = ""
     form: str = ""  # a window to fill in before the job starts, e.g. "sprites"
+    group: str = ""  # the sidebar section the button goes in, e.g. "Data"
 
     @property
     def enabled(self) -> bool:
@@ -63,6 +64,7 @@ def parse(data: dict, source: str = "<builtin>") -> Config:
                 heavy=bool(raw.get("heavy", True)),
                 description=str(raw.get("description", "")),
                 form=str(raw.get("form", "")),
+                group=str(raw.get("group", "")),
             )
         )
     all_paths = {

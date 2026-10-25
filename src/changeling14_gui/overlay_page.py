@@ -8,6 +8,7 @@ page starts it, reads the STATUS lines it prints, and stops it cleanly.
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import queue
@@ -22,6 +23,7 @@ from tkinter import ttk
 
 from . import replays
 from .config import Config
+from .forms import MUTED, REFRESH_TIP, _plural, side_buttons
 
 ENGINES = {"Neural Engine (Core ML)": "coreml", "GPU (PyTorch)": "torch"}
 VIEWS = {"Auto (found from the game)": "auto", "Manual (my own box)": "manual"}
@@ -138,9 +140,12 @@ class OverlayPage(ttk.Frame):
         self.tree.bind("<<TreeviewSelect>>", lambda _e: self.on_model())
         side = ttk.Frame(self)
         side.grid(row=1, column=1, sticky="n", padx=(8, 0), pady=(4, 0))
-        ttk.Button(side, text="Refresh", command=self.load_models).pack(fill="x")
-        self.convert_btn = ttk.Button(side, text="Convert for Neural Engine", command=self.convert)
-        self.convert_btn.pack(fill="x", pady=(4, 0))
+        self.convert_btn = side_buttons(side, [
+            ("Refresh", self.reload, REFRESH_TIP),
+            ("Convert for Neural Engine", self.convert,
+             "Export the model to Core ML now, at the last game-view size (else 288x320). Starting the overlay "
+             "also converts it when needed."),
+        ])["Convert for Neural Engine"]
 
         opts = ttk.LabelFrame(self, text="Settings", padding=8)
         opts.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(10, 0))
@@ -173,7 +178,7 @@ class OverlayPage(ttk.Frame):
                              "game view from SS14's settings, the floor grid and your character, and hides "
                              "detections under the HUD.",
                   wraplength=760, justify="left",
-                  foreground="#666").grid(row=4, column=0, columnspan=4, sticky="w", pady=(6, 0))
+                  foreground=MUTED).grid(row=4, column=0, columnspan=4, sticky="w", pady=(6, 0))
 
         buttons = ttk.Frame(self)
         buttons.grid(row=3, column=0, columnspan=2, sticky="w", pady=(10, 0))
@@ -187,9 +192,9 @@ class OverlayPage(ttk.Frame):
         self.rowconfigure(4, weight=1)
         self.state_label = ttk.Label(stat, text="Stopped")
         self.state_label.grid(row=0, column=0, sticky="w")
-        self.status_label = ttk.Label(stat, text="", foreground="#444")
+        self.status_label = ttk.Label(stat, text="")
         self.status_label.grid(row=1, column=0, sticky="w", pady=(2, 0))
-        self.view_label = ttk.Label(stat, text="", foreground="#444", wraplength=760, justify="left")
+        self.view_label = ttk.Label(stat, text="", wraplength=760, justify="left")
         self.view_label.grid(row=5, column=0, sticky="w", pady=(2, 0))
         self.warn_label = ttk.Label(stat, text="", foreground="#b00020", wraplength=760, justify="left")
         self.warn_label.grid(row=2, column=0, sticky="w", pady=(4, 0))
@@ -223,6 +228,10 @@ class OverlayPage(ttk.Frame):
         if index is not None:
             self.tree.selection_set(str(index))
         self.on_model()
+
+    def reload(self) -> None:
+        self.load_models()
+        self._log(f"Refreshed: {_plural(len(self.models), 'replay-trained model')}.")
 
     def selected(self) -> OverlayModel | None:
         sel = self.tree.selection() if hasattr(self, "models") else ()
@@ -261,6 +270,10 @@ class OverlayPage(ttk.Frame):
         self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
                                      start_new_session=True, env=dict(os.environ, PYTHONUNBUFFERED="1"))
         self.running_model = m.path
+        if not getattr(self, "_atexit", False):
+            # The overlay runs in its own session; stop it if this app ends without on_close.
+            atexit.register(self.stop)
+            self._atexit = True
         threading.Thread(target=self._read, args=(self.proc,), daemon=True).start()
         self.start_btn.configure(text="Stop overlay")
         self.state_label.configure(text=f"Starting {m.path.name} on {self.engine.get()}…")
@@ -339,7 +352,7 @@ class OverlayPage(ttk.Frame):
                     self.state_label.configure(text="Running" if s.get("window", True) else "Waiting for the game")
                     self.status_label.configure(text=status_text(s))
                     text, attention = view_text(s)
-                    self.view_label.configure(text=text, foreground="#b06000" if attention else "#444")
+                    self.view_label.configure(text=text, foreground="#d08000" if attention else "")
                     if s.get("input"):
                         self.last_input = f"{s['input'][0]}x{s['input'][1]}"
                     continue
