@@ -80,6 +80,15 @@ shows fps, milliseconds per stage, the engine and whether the game window was
 found. macOS needs Screen Recording for the app that started
 `changeling14-gui` (usually Terminal). The overlay only reads the screen.
 
+**Game view** is Auto by default: the overlay works out where the game world
+is from SS14's own settings file (read-only: layout, viewport scale, UI scale,
+chat size), checks the tile size and zoom against the floor grid and the
+player at the centre, snaps its squares to the tile lines every frame and
+hides detections under the HUD (menu buttons, actions, chat, alerts, hands).
+The status shows the view it found, where from and how sure it is; when it
+can't check (a dark view, the lobby) it keeps the last good view. Manual uses
+a box you drag: **Re-pick game view (manual)**.
+
 ## Not yet
 
 Per-category accuracy charts, the coverage report, benchmark tables and

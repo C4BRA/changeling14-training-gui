@@ -483,9 +483,19 @@ def test_live_overlay_page_helpers(tmp_path):
     assert (m.step, m.name_top5, m.neural_sizes) == (1000, 0.6, ("288x320",))
     assert m.row() == ("replay-a", "1,000", "60%", "288x320")
     cmd = overlay_page.overlay_command(m.path, "coreml", 0.5, 0.6, 30, "", True, True, False)
-    assert cmd[-9:] == ["--backend", "coreml", "--threshold", "0.5", "--name-threshold", "0.6", "--fps", "30",
-                        "--floor"]
-    assert "--tile-px" in overlay_page.overlay_command(m.path, "torch", 0.5, 0.6, 30, "80", False, False, True)
+    assert cmd[-11:] == ["--backend", "coreml", "--threshold", "0.5", "--name-threshold", "0.6", "--fps", "30",
+                         "--view", "auto", "--floor"]
+    picked = overlay_page.overlay_command(m.path, "torch", 0.5, 0.6, 30, "80", False, False, True)
+    assert "--tile-px" in picked and "--pick" in picked and picked[picked.index("--view") + 1] == "manual"
+    assert "manual" in overlay_page.overlay_command(m.path, "torch", 0.5, 0.6, 30, "", True, False, False, "manual")
+    text, attention = overlay_page.view_text({"view": {"mode": "auto", "source": "settings+grid+player",
+                                                       "confidence": 0.9, "rect_pt": [0, 0, 1470, 813],
+                                                       "tile_pt": 80, "zoom": 1.0, "hud_dropped": 54, "note": ""}})
+    assert "auto, 1470x813 pt" in text and "90% sure" in text and "54 HUD" in text and not attention
+    text, attention = overlay_page.view_text({"view": {"mode": "auto", "confidence": 0.7, "rect_pt": [0, 0, 9, 9],
+                                                       "tile_pt": 80, "note": "holding last good (dark view)"}})
+    assert attention and "holding last good" in text
+    assert overlay_page.view_text({"view": {"mode": "manual"}})[0].startswith("Game view: manual")
     s = overlay_page.parse_status('STATUS {"fps":24.5,"ms":{"capture":30,"resize":8,"model":4,"names":5},'
                                   '"engine":"Neural Engine (Core ML)","window":true,"tile_px":80,"tile_source":"grid",'
                                   '"things":60}')
