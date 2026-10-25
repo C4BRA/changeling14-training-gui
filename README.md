@@ -50,7 +50,6 @@ The built-in `jobs.toml` has:
 | Import replays | copies replay .zip files from the inbox into the replay library (`changeling14-vision replays import`); deleting them from the inbox is an opt-in checkbox |
 | Record replays | pick a library replay and the codebase checkout it came from; plays it in a replay client and saves pictures with answer keys (a game window opens and must stay visible) |
 | Build dataset | turns the recordings into a training dataset with optional held-out round ids. Output name `replay-dataset` is the original `~/Desktop/SS13-14/replay-dataset`; any other name goes to `~/Desktop/SS13-14/replay-datasets/<name>` |
-| Live overlay | pick a replay-trained model; draws its boxes and names on top of the SS14 client window while you play (`changeling14-vision replays overlay`, macOS, needs Screen Recording for Terminal) |
 | Train on replays | pick a dataset (every folder with a `dataset.json`, newest first, or Browse…) and a sprite model trained with text to start from; trains a model to find and name things in replay frames |
 
 Train, Benchmark and Export need the pipeline's extras:
@@ -70,6 +69,16 @@ To change paths or add jobs, copy `src/changeling14_gui/jobs.toml` to
 Runs go to `~/Desktop/SS13-14/changeling14-runs/<time>-<job>/`. The format
 is in [docs/run-folder.md](docs/run-folder.md); the app writes only
 `run.json` and `console.log` there.
+
+## Live overlay
+
+The **Live overlay** tab runs a replay-trained model on top of the SS14
+window while you play (`changeling14-vision replays overlay`, macOS). Pick a
+model, an engine (Neural Engine via Core ML, converted once per game-view
+size, or the GPU via PyTorch) and the settings, then Start. The status line
+shows fps, milliseconds per stage, the engine and whether the game window was
+found. macOS needs Screen Recording for the app that started
+`changeling14-gui` (usually Terminal). The overlay only reads the screen.
 
 ## Not yet
 

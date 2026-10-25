@@ -468,14 +468,27 @@ def test_dataset_picker_skips_rebuild_folders(tmp_path):
     assert [d.path.name for d in replays.replay_datasets(cfg)] == ["audit-v2"]
 
 
-def test_live_overlay_models_and_args(tmp_path):
-    from changeling14_gui import replays
+def test_live_overlay_page_helpers(tmp_path):
+    from changeling14_gui import overlay_page, replays
     models = tmp_path / "models"
     for name, cfgtext in (("sprite-pretrain-nano", '{"data": "x"}'), ("replay-a", '{"start": "s", "dataset": "d"}')):
         (models / name).mkdir(parents=True)
         (models / name / "config.json").write_text(cfgtext)
         (models / name / "latest.pt").write_bytes(b"")
+    (models / "replay-a" / "metrics.jsonl").write_text('{"step": 500, "name_top5": 0.4}\n{"step": 1000, "name_top5": 0.6}\n')
+    (models / "replay-a" / "coreml" / "detect_288x320.mlpackage").mkdir(parents=True)
     cfg = config.parse({"paths": {"models": str(models)}})
     assert replays.replay_models(cfg) == [models / "replay-a"]
-    assert replays.overlay_args(True, False, "0.4") == ["--threshold", "0.4", "--floor"]
-    assert replays.overlay_args(False, True, "0.5") == ["--threshold", "0.5", "--pick"]
+    (m,) = overlay_page.describe_models(cfg)
+    assert (m.step, m.name_top5, m.neural_sizes) == (1000, 0.6, ("288x320",))
+    assert m.row() == ("replay-a", "1,000", "60%", "288x320")
+    cmd = overlay_page.overlay_command(m.path, "coreml", 0.5, 0.6, 30, "", True, True, False)
+    assert cmd[-9:] == ["--backend", "coreml", "--threshold", "0.5", "--name-threshold", "0.6", "--fps", "30",
+                        "--floor"]
+    assert "--tile-px" in overlay_page.overlay_command(m.path, "torch", 0.5, 0.6, 30, "80", False, False, True)
+    s = overlay_page.parse_status('STATUS {"fps":24.5,"ms":{"capture":30,"resize":8,"model":4,"names":5},'
+                                  '"engine":"Neural Engine (Core ML)","window":true,"tile_px":80,"tile_source":"grid",'
+                                  '"things":60}')
+    assert "24.5 fps on Neural Engine" in overlay_page.status_text(s) and "model 4" in overlay_page.status_text(s)
+    assert "not found" in overlay_page.status_text({"window": False})
+    assert overlay_page.parse_status("overlay: hello") is None

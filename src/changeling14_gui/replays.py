@@ -206,15 +206,6 @@ def replay_models(cfg: Config) -> list[Path]:
     return sorted(found, key=lambda p: -(p / "latest.pt").stat().st_mtime)
 
 
-def overlay_args(floor: bool, pick: bool, threshold: str) -> list[str]:
-    args = ["--threshold", f"{float(threshold):g}"]
-    if floor:
-        args.append("--floor")
-    if pick:
-        args.append("--pick")
-    return args
-
-
 def text_models(cfg: Config) -> list[Path]:
     """Sprite models a replay model can start from: stage-1 folders with text.npz."""
     models = cfg.paths.get("models")

@@ -37,7 +37,6 @@ size = "tiny"
 replay = ""
 replay_model = ""
 start_model = ""
-overlay_model = ""
 
 [[jobs]]
 id = "demo"
@@ -119,11 +118,3 @@ heavy = true
 form = "replay-train"
 command = ["{python}", "-m", "changeling14_vision", "--run-dir", "{run_dir}", "replays", "train", "{replay_model}",
            "--from", "{start_model}", "--dataset", "{replay_dataset}", "--models", "{models}"]
-
-[[jobs]]
-id = "live-overlay"
-label = "Live overlay"
-description = "Draw a replay model's boxes and names on top of the SS14 window while you play (macOS)."
-heavy = false
-form = "overlay"
-command = ["{python}", "-m", "changeling14_vision", "--run-dir", "{run_dir}", "replays", "overlay", "{overlay_model}"]

@@ -17,6 +17,7 @@ from tkinter import messagebox, ttk
 from . import cards, sysinfo
 from .config import Config, JobSpec
 from .forms import FORMS as SPRITE_FORMS
+from .overlay_page import OverlayPage
 from .replay_forms import REPLAY_FORMS
 from .runfolder import Checkpoint, RunFolder, list_runs
 from .runner import Runner
@@ -277,8 +278,12 @@ class App:
     # Layout --------------------------------------------------------------
 
     def _build(self) -> None:
-        outer = ttk.Frame(self.root, padding=8)
-        outer.pack(fill="both", expand=True)
+        book = ttk.Notebook(self.root)
+        book.pack(fill="both", expand=True)
+        outer = ttk.Frame(book, padding=8)
+        book.add(outer, text="Training")
+        self.overlay_page = OverlayPage(book, self.cfg)
+        book.add(self.overlay_page, text="Live overlay")
         outer.columnconfigure(1, weight=1)
         outer.rowconfigure(0, weight=1)
 
@@ -347,7 +352,7 @@ class App:
         tabs.add(log_frame, text="Log")
 
         self.footer = ttk.Label(self.root, text="", padding=(8, 2, 8, 6), foreground="#555")
-        self.footer.pack(fill="x", side="bottom")
+        self.footer.pack(fill="x", side="bottom", before=book)
 
     # Actions -------------------------------------------------------------
 
@@ -437,6 +442,7 @@ class App:
                 self.runner.stop(run)
             if answer:
                 self.runner.stop_all()
+        self.overlay_page.stop()
         self.root.destroy()
 
     # Refresh -------------------------------------------------------------
