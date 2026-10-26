@@ -63,7 +63,7 @@ def test_builtin_config_loads():
     ids = [j.id for j in cfg.jobs]
     assert ids[:2] == ["demo", "sprites"]
     assert cfg.job("demo").enabled and cfg.job("train").enabled
-    assert not cfg.job("import-replays").enabled
+    assert all(cfg.job(j).enabled for j in ("import-replays", "record-replays", "build-dataset", "train-replays"))
 
 
 def test_placeholders(cfg, tmp_path):
@@ -287,8 +287,18 @@ def test_train_checks(lib, tmp_path):
     assert not forms.check_new(oxyd, str(models / "new"), "huge", "20000", "").ok
     assert forms.train_args("500", " 30 ", True, True, text=False) == [
         "--steps", "500", "--minutes", "30", "--amp", "--fresh", "--no-text"]
+    assert forms.train_args("10000", "", False, False, batch=256, optimizer="schedulefree", rich_text=True) == [
+        "--steps", "10000", "--batch", "256", "--optimizer", "schedulefree", "--rich-text"]
+    assert forms.train_args("100", "", False, False, dedup=False) == ["--steps", "100", "--no-dedup"]
+    assert forms.rescale_steps("20000", 128, 256) == "10000"
+    assert forms.rescale_steps("10000", 256, 512) == "5000"
+    assert forms.rescale_steps("5000", 512, 128) == "20000"
+    assert forms.rescale_steps("abc", 128, 256) == "abc"
 
     assert forms.check_model(model, needs_data=True).ok
+    assert model.duplicates_report is None
+    (model.path / "duplicates.html").write_text("<html></html>")
+    assert library.models()[0].duplicates_report == model.path / "duplicates.html"
     import shutil
     shutil.rmtree(wizden)
     assert not forms.check_continue(library.models()[0], "20000", "", False).ok
@@ -338,3 +348,259 @@ def test_watchset_cards(tmp_path):
     assert cards.summary(first).endswith("had 1 more in its top 5.")
     assert cards.summary(second, second) .endswith("no change since the last checkpoint.")
     assert cards.trend(cps) == [(0, 0.0, 1 / 3), (1000, 0.02, 0.1)]
+
+
+def test_replay_jobs(tmp_path):
+    from changeling14_gui import replays
+    lib, rec, models = tmp_path / "lib", tmp_path / "rec", tmp_path / "models"
+    (lib / "wizards-abc").mkdir(parents=True)
+    for name in ("salamander-x-round_115835.zip", "leviathan-y-round_115836.zip"):
+        (lib / "wizards-abc" / name).write_bytes(b"zip")
+    (lib / "replays.jsonl").write_text("".join(json.dumps({"file": f"wizards-abc/{n}", "build": "wizards-abc",
+                                                           "duration": d}) + "\n"
+                                               for n, d in (("salamander-x-round_115835.zip", 6270.0),
+                                                            ("leviathan-y-round_115836.zip", 4089.0),
+                                                            ("gone-round_1.zip", 1.0))))
+    (rec / "salamander-x-round_115835" / "frames").mkdir(parents=True)
+    for i in range(3):
+        (rec / "salamander-x-round_115835" / "frames" / f"{i}.png").write_bytes(b"")
+    for name, text in (("sprite-pretrain-nano", True), ("no-text", False)):
+        (models / name).mkdir(parents=True)
+        (models / name / "config.json").write_text("{}")
+        if text:
+            (models / name / "text.npz").write_bytes(b"")
+    cfg = config.parse({"paths": {"replay_library": str(lib), "replay_recordings": str(rec),
+                                  "replay_dataset": str(tmp_path / "ds"), "models": str(models)}})
+
+    items = replays.library_replays(cfg)
+    assert [(r.name, r.round_id, r.recorded) for r in items] == [
+        ("salamander-x-round_115835.zip", "115835", 3), ("leviathan-y-round_115836.zip", "115836", 0)]
+    assert replays.duration_text(6270.0) == "1 h 44 min"
+    assert replays.recording_rounds(cfg) == ["115835"]
+    assert replays.text_models(cfg) == [models / "sprite-pretrain-nano"]
+    (models / "replay-x").mkdir()
+    (models / "replay-x" / "config.json").write_text('{"start": "a", "dataset": "b"}')
+    (models / "replay-x" / "text.npz").write_bytes(b"")
+    assert replays.text_models(cfg) == [models / "sprite-pretrain-nano"]
+
+    src = tmp_path / "ss14"
+    (src / "RobustToolbox").mkdir(parents=True)
+    (src / ".git").mkdir()
+    assert replays.check_record(items[1], str(src), "10", "2", "")[0]
+    assert "replaces" in replays.check_record(items[0], str(src), "10", "2", "")[1]
+    assert not replays.check_record(items[1], str(tmp_path), "10", "2", "")[0]
+    assert not replays.check_record(items[1], str(src), "0", "2", "")[0]
+    assert replays.record_args("10", "2", "") == ["--interval", "10", "--players", "2"]
+    assert replays.record_args("2.5", "1", "6") == ["--interval", "2.5", "--players", "1", "--max-pictures", "6"]
+
+    assert replays.check_holdout("", ["115835", "115836"])[0]
+    assert not replays.check_holdout("115835, 115836", ["115835", "115836"])[0]
+    assert not replays.check_holdout("999", ["115835", "115836"])[0]
+    assert not replays.check_holdout("", [])[0]
+    assert replays.holdout_args(" 115836 ") == ["--holdout", "115836"] and replays.holdout_args("") == []
+
+    start = models / "sprite-pretrain-nano"
+    assert not replays.check_replay_train(start, "replay-nano", tmp_path / "ds", "6000", "8", "")[0]   # no dataset
+    assert not replays.check_replay_train(start, "replay-nano", None, "6000", "8", "")[0]
+    (tmp_path / "ds").mkdir()
+    (tmp_path / "ds" / "dataset.json").write_text("{}")
+    assert replays.check_replay_train(start, "replay-nano", tmp_path / "ds", "6000", "8", "")[0]
+    assert not replays.check_replay_train(start, "sprite-pretrain-nano", tmp_path / "ds", "6000", "8", "")[0]
+    assert replays.replay_train_args("6000", "8", "30") == ["--steps", "6000", "--batch", "8", "--minutes", "30"]
+
+
+def test_overrides_win_over_inbox_and_runs(tmp_path):
+    cfg = config.parse({"paths": {"inbox": "/a/inbox"}})
+    job = config.JobSpec("x", "x", ("--inbox", "{inbox}"))
+    assert config.expand_command(job, cfg, tmp_path, {"inbox": Path("/b/inbox")}) == ["--inbox", "/b/inbox"]
+
+
+def test_replay_datasets(tmp_path):
+    import os
+    from changeling14_gui import replays
+    legacy, named = tmp_path / "replay-dataset", tmp_path / "replay-datasets"
+    cfg = config.parse({"paths": {"replay_dataset": str(legacy), "replay_datasets": str(named)}})
+    # The old top-level replay-dataset folder is used only while it holds a dataset.
+    assert replays.dataset_path(cfg, "replay-dataset") == named / "replay-dataset"
+    assert replays.dataset_path(cfg, " zoom1 ") == named / "zoom1"
+    assert replays.default_dataset_name(cfg) == "replay-dataset"
+    assert replays.check_dataset_name("bad name/") and replays.check_dataset_name("") and not replays.check_dataset_name("v2.1_x")
+
+    def make(path, frames, mtime):
+        path.mkdir(parents=True)
+        (path / "dataset.json").write_text('{"version": 1, "tile": 32, "summary": {"frames": %d, "train_frames": 3, '
+                                           '"test_frames": 1, "test_rounds": ["115836"]}, "frames": []}' % frames)
+        os.utime(path / "dataset.json", (mtime, mtime))
+    make(legacy, 1717, 1000)
+    assert replays.dataset_path(cfg, "replay-dataset") == legacy
+    assert replays.default_dataset_name(cfg) == "replay-dataset-2"     # never replaces one by default
+    make(named / "zoom1", 1600, 2000)
+    (named / "empty").mkdir()
+    elsewhere = tmp_path / "far" / "mine"
+    make(elsewhere, 5, 500)
+    found = replays.replay_datasets(cfg, [elsewhere])
+    assert [d.path for d in found] == [named / "zoom1", legacy, elsewhere]          # newest first
+    assert found[1].describe()[:5] == ("replay-dataset", "1,717", "3", "1", "115836")
+    assert replays.check_dataset_out(str(legacy))[1].startswith("Replaces")
+    assert replays.check_dataset_out(str(named / "new"))[0]
+    (tmp_path / "junk").mkdir()
+    (tmp_path / "junk" / "x.txt").write_text("x")
+    assert not replays.check_dataset_out(str(tmp_path / "junk"))[0]
+
+
+def test_failure_reason_and_keep_args(tmp_path):
+    from changeling14_gui import forms, replays
+    run = RunFolder(tmp_path)
+    (tmp_path / "console.log").write_text("detect: starting\n/x/replay-a was trained on the dataset in /d1, not /d2; "
+                                          "pass --allow-new-data to resume it anyway\n\n[exit code 1]\n")
+    assert run.failure_reason().startswith("/x/replay-a was trained on the dataset")
+    (tmp_path / "console.log").write_text("train: x\nerror: something broke\nmore\n[exit code 2]\n")
+    assert run.failure_reason() == "error: something broke"
+    assert forms.train_args("10", "", False, False, keep="5") == ["--steps", "10", "--keep-checkpoints", "5"]
+    assert forms.check_keep("-1") and forms.check_keep("x") and not forms.check_keep("0")
+    assert replays.replay_train_args("6000", "8", "", "0", True) == [
+        "--steps", "6000", "--batch", "8", "--keep-checkpoints", "0", "--allow-new-data"]
+
+
+def test_dataset_picker_skips_rebuild_folders(tmp_path):
+    from changeling14_gui import replays
+    named = tmp_path / "replay-datasets"
+    for n in ("audit-v2", ".audit-v2.building", ".audit-v2.previous"):
+        (named / n).mkdir(parents=True)
+        (named / n / "dataset.json").write_text('{"version": 2, "summary": {"frames": 1}}')
+    cfg = config.parse({"paths": {"replay_dataset": str(tmp_path / "replay-dataset"), "replay_datasets": str(named)}})
+    assert [d.path.name for d in replays.replay_datasets(cfg)] == ["audit-v2"]
+
+
+def test_live_overlay_page_helpers(tmp_path):
+    from changeling14_gui import overlay_page, replays
+    models = tmp_path / "models"
+    for name, cfgtext in (("sprite-pretrain-nano", '{"data": "x"}'), ("replay-a", '{"start": "s", "dataset": "d"}')):
+        (models / name).mkdir(parents=True)
+        (models / name / "config.json").write_text(cfgtext)
+        (models / name / "latest.pt").write_bytes(b"")
+    (models / "replay-a" / "metrics.jsonl").write_text('{"step": 500, "name_top5": 0.4}\n{"step": 1000, "name_top5": 0.6}\n')
+    (models / "replay-a" / "coreml" / "detect_288x320.mlpackage").mkdir(parents=True)
+    cfg = config.parse({"paths": {"models": str(models)}})
+    assert replays.replay_models(cfg) == [models / "replay-a"]
+    (m,) = overlay_page.describe_models(cfg)
+    assert (m.step, m.name_top5, m.neural_sizes) == (1000, 0.6, ("288x320",))
+    assert m.row() == ("replay-a", "1,000", "60%", "288x320")
+    cmd = overlay_page.overlay_command(m.path, "coreml", 0.5, 0.6, 30, "", True, True, False)
+    assert cmd[-11:] == ["--backend", "coreml", "--threshold", "0.5", "--name-threshold", "0.6", "--fps", "30",
+                         "--view", "auto", "--floor"]
+    picked = overlay_page.overlay_command(m.path, "torch", 0.5, 0.6, 30, "80", False, False, True)
+    assert "--tile-px" in picked and "--pick" in picked and picked[picked.index("--view") + 1] == "manual"
+    assert "manual" in overlay_page.overlay_command(m.path, "torch", 0.5, 0.6, 30, "", True, False, False, "manual")
+    text, attention = overlay_page.view_text({"view": {"mode": "auto", "source": "settings+grid+player",
+                                                       "confidence": 0.9, "rect_pt": [0, 0, 1470, 813],
+                                                       "tile_pt": 80, "zoom": 1.0, "hud_dropped": 54, "note": ""}})
+    assert "auto, 1470x813 pt" in text and "90% sure" in text and "54 HUD" in text and not attention
+    text, attention = overlay_page.view_text({"view": {"mode": "auto", "confidence": 0.7, "rect_pt": [0, 0, 9, 9],
+                                                       "tile_pt": 80, "note": "holding last good (dark view)"}})
+    assert attention and "holding last good" in text
+    assert overlay_page.view_text({"view": {"mode": "manual"}})[0].startswith("Game view: manual")
+    s = overlay_page.parse_status('STATUS {"fps":24.5,"ms":{"capture":30,"resize":8,"model":4,"names":5},'
+                                  '"engine":"Neural Engine (Core ML)","window":true,"tile_px":80,"tile_source":"grid",'
+                                  '"things":60}')
+    assert "24.5 fps on Neural Engine" in overlay_page.status_text(s) and "model 4" in overlay_page.status_text(s)
+    assert "not found" in overlay_page.status_text({"window": False})
+    assert overlay_page.parse_status("overlay: hello") is None
+
+
+def test_refresh_prunes_only_the_remembered_list(tmp_path):
+    from changeling14_gui import forms, library, replays
+    store = tmp_path / "library.json"
+    cfg = config.parse({"paths": {"models": str(tmp_path / "models"), "sprite_dataset": str(tmp_path / "cat"),
+                                  "replay_dataset": str(tmp_path / "replay-dataset"),
+                                  "replay_datasets": str(tmp_path / "replay-datasets")}})
+    lib = library.Library(cfg, store)
+    model, gone_model = tmp_path / "far" / "m1", tmp_path / "far" / "m2"
+    for m in (model, gone_model):
+        m.mkdir(parents=True)
+        (m / "config.json").write_text('{"size": "nano", "data": "x"}')
+    cat = tmp_path / "far" / "cat"
+    (cat / "catalogue").mkdir(parents=True)
+    (cat / "manifest.json").write_text("{}")
+    (cat / "catalogue" / "images.jsonl").write_text("")
+    ds, gone_ds = tmp_path / "far" / "ds", tmp_path / "far" / "ds-old"
+    for d in (ds, gone_ds):
+        d.mkdir(parents=True)
+        (d / "dataset.json").write_text('{"summary": {"frames": 3}}')
+    for kind, path in (("models", model), ("models", gone_model), ("catalogues", cat), ("datasets", ds),
+                       ("datasets", gone_ds)):
+        lib.remember(kind, path)
+    lib.remember("models", model)                                     # remembered once
+    assert lib.remembered("models") == [model, gone_model]
+    assert lib.prune() == {}                                          # nothing gone yet
+    # Deleted outside the app: one model and one dataset folder; another model folder emptied.
+    import shutil
+    shutil.rmtree(gone_model)
+    shutil.rmtree(gone_ds)
+    (model / "config.json").unlink()
+    removed = lib.prune()
+    assert removed == {"models": [model, gone_model], "datasets": [gone_ds]}
+    assert lib.remembered("models") == [] and lib.remembered("datasets") == [ds] and lib.remembered("catalogues") == [cat]
+    assert model.is_dir() and ds.is_dir() and cat.is_dir()            # nothing on disk was touched
+    assert lib.prune() == {}
+    assert [d.path for d in replays.replay_datasets(cfg, lib.remembered("datasets"))] == [ds]
+    note = forms.history_note("1 model", {"models": [gone_model]})
+    assert "Removed 1 missing folder" in note and "m2" in note and "nothing on disk was deleted" in note
+    assert forms.history_note("2 models", {}) == "Refreshed: 2 models."
+
+
+def test_sidebar_groups_and_missing_library_files(tmp_path):
+    from changeling14_gui import app, replays
+    cfg = config.parse(__import__("tomllib").loads(
+        (Path(__file__).parent.parent / "src/changeling14_gui/jobs.toml").read_text()))
+    groups = app.job_groups(cfg.jobs)
+    assert [g for g, _ in groups] == ["Data", "Train", "Evaluate and export", "Tools"]
+    assert [j.label for j in dict(groups)["Train"]] == ["Train sprite model", "Train on replays"]
+    lib = tmp_path / "lib"
+    (lib / "b").mkdir(parents=True)
+    (lib / "b" / "here.zip").write_bytes(b"")
+    (lib / "replays.jsonl").write_text('{"file": "b/here.zip"}\n{"file": "b/gone.zip"}\nnot json\n')
+    cfg2 = config.parse({"paths": {"replay_library": str(lib), "replay_recordings": str(tmp_path / "rec")}})
+    assert [r.file for r in replays.library_replays(cfg2)] == ["b/here.zip"]
+    assert replays.missing_library_files(cfg2) == 1
+
+
+def test_every_section_reachable_in_a_short_window():
+    """The sidebar's job sections scroll; the queue and its Stop button stay on screen at any height;
+    the overlay tab and the job windows scroll instead of being cut off."""
+    tk = pytest.importorskip("tkinter")
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("no display")
+    root.withdraw()
+    _orig = tk.Toplevel.__init__
+
+    def hidden(self, *a, **k):
+        _orig(self, *a, **k)
+        self.withdraw()
+    tk.Toplevel.__init__ = hidden
+    try:
+        from changeling14_gui import app as A
+        cfg = config.parse(__import__("tomllib").loads(
+            (Path(__file__).parent.parent / "src/changeling14_gui/jobs.toml").read_text()))
+        a = A.App(root, cfg)
+        for height in (560, 700, 900):
+            root.geometry(f"900x{height}")
+            root.update()
+            queue = a.queue_list.master
+            bottom = queue.winfo_rooty() - root.winfo_rooty() + queue.winfo_height()
+            assert queue.winfo_height() > 60 and bottom <= height, (height, bottom)
+        a.book.select(a.overlay_tab)
+        root.geometry("900x560")
+        root.update()
+        assert a.overlay_tab.needs_scroll()                    # too short: it scrolls rather than cuts off
+        region = [float(v) for v in a.overlay_tab.canvas.cget("scrollregion").split()]
+        assert region[3] >= a.overlay_page.winfo_reqheight()
+        w = A.FORMS["train"](root, cfg, cfg.job("train"), set())
+        w.fit_to_screen()
+        assert w.top.winfo_height() <= max(300, w.top.winfo_screenheight() - 160)
+        w.top.destroy()
+    finally:
+        tk.Toplevel.__init__ = _orig
+        root.destroy()

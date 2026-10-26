@@ -1,8 +1,9 @@
 # Changeling14 training GUI: job buttons.
 #
 # Copy this file to ~/.changeling14/gui.toml to customise it.
-# Each [[jobs]] entry becomes a button. The command is run as a separate
-# program; the app only watches its run folder.
+# Each [[jobs]] entry becomes a button in its group's section of the sidebar
+# (sections appear in the order their first job does). The command is run as a
+# separate program; the app only watches its run folder.
 #
 # Placeholders in commands:
 #   {python}   the Python running this app
@@ -16,7 +17,8 @@
 # A job with an empty command shows as a disabled button.
 # form = "sprites" opens the codebase picker before the job starts, "train"
 # the model picker with training options, "model" a model and checkpoint
-# picker. Their choices replace placeholders for that run only.
+# picker; "import", "record", "dataset" and "replay-train" the replay windows.
+# Their choices replace placeholders for that run only.
 
 [paths]
 runs = "~/Desktop/SS13-14/changeling14-runs"
@@ -25,13 +27,22 @@ wizden = "~/Desktop/SS13-14/wizden-ss14"
 sprite_dataset = "~/Desktop/SS13-14/ss14-sprite-dataset"
 models = "~/Desktop/SS13-14/changeling14-models"
 model_dir = "~/Desktop/SS13-14/changeling14-models/sprite-pretrain-tiny"
+replay_library = "~/Desktop/SS13-14/replay-library"
+replay_recordings = "~/Desktop/SS13-14/replay-recordings"
+replay_dataset = "~/Desktop/SS13-14/replay-dataset"
+replay_datasets = "~/Desktop/SS13-14/replay-datasets"
 
 [values]
 size = "tiny"
+# Filled in by the replay windows for each run.
+replay = ""
+replay_model = ""
+start_model = ""
 
 [[jobs]]
 id = "demo"
-label = "Demo training run"
+label = "Run demo training"
+group = "Tools"
 description = "Writes a fake run (progress, log, watch set) to try the app."
 heavy = true
 command = ["{python}", "-m", "changeling14_gui.demo", "--run-dir", "{run_dir}"]
@@ -39,6 +50,7 @@ command = ["{python}", "-m", "changeling14_gui.demo", "--run-dir", "{run_dir}"]
 [[jobs]]
 id = "sprites"
 label = "Build sprite catalogue"
+group = "Data"
 description = "M0: choose a codebase, then cut its sprites, link them to entities, write credits and a report."
 heavy = true
 # Opens a window to pick the codebase and output folder; they replace
@@ -48,22 +60,9 @@ command = ["{python}", "-m", "changeling14_vision", "--run-dir", "{run_dir}",
            "sprites", "--repo", "{wizden}", "--out", "{sprite_dataset}"]
 
 [[jobs]]
-id = "import-replays"
-label = "Import replays from inbox"
-description = "Scan, render and label each replay in the inbox, then delete it."
-heavy = true
-command = []
-
-[[jobs]]
-id = "build-dataset"
-label = "Build dataset"
-description = "Sprite catalogue, concept map and replay frames into one dataset."
-heavy = true
-command = []
-
-[[jobs]]
 id = "train"
-label = "Train"
+label = "Train sprite model"
+group = "Train"
 description = "Sprite pretraining: continue a model or start a new one from a catalogue; saves on stop."
 heavy = true
 form = "train"
@@ -72,7 +71,8 @@ command = ["{python}", "-m", "changeling14_vision", "--run-dir", "{run_dir}", "t
 
 [[jobs]]
 id = "benchmark"
-label = "Benchmark"
+label = "Benchmark model"
+group = "Evaluate and export"
 description = "Score a model checkpoint on its catalogue's held-out sprites."
 heavy = true
 form = "model"
@@ -81,9 +81,50 @@ command = ["{python}", "-m", "changeling14_vision", "--run-dir", "{run_dir}", "b
 
 [[jobs]]
 id = "export"
-label = "Export"
+label = "Export model"
+group = "Evaluate and export"
 description = "Export a model checkpoint to safetensors, ONNX, MLX and Core ML."
 heavy = true
 form = "model"
 command = ["{python}", "-m", "changeling14_vision", "--run-dir", "{run_dir}", "export",
            "--out", "{model_dir}", "--size", "{size}"]
+
+[[jobs]]
+id = "import-replays"
+label = "Import replays"
+group = "Data"
+description = "Copy replay .zip files from the inbox into the library, grouped by the build that plays them."
+heavy = false
+form = "import"
+command = ["{python}", "-m", "changeling14_vision", "--run-dir", "{run_dir}", "replays", "import",
+           "--inbox", "{inbox}", "--library", "{replay_library}"]
+
+[[jobs]]
+id = "record-replays"
+label = "Record replays"
+group = "Data"
+description = "Play a library replay in a replay client and save pictures with answer keys. A game window opens."
+heavy = true
+form = "record"
+command = ["{python}", "-m", "changeling14_vision", "--run-dir", "{run_dir}", "replays", "record", "{replay}",
+           "--library", "{replay_library}", "--source", "{wizden}", "--out", "{replay_recordings}"]
+
+[[jobs]]
+id = "build-dataset"
+label = "Build replay dataset"
+group = "Data"
+description = "Turn the replay recordings into a training dataset, with some rounds held out for testing."
+heavy = true
+form = "dataset"
+command = ["{python}", "-m", "changeling14_vision", "--run-dir", "{run_dir}", "replays", "dataset",
+           "--recordings", "{replay_recordings}", "--library", "{replay_library}", "--out", "{replay_dataset}"]
+
+[[jobs]]
+id = "train-replays"
+label = "Train on replays"
+group = "Train"
+description = "Train a sprite model to find and name things in replay frames, starting from a sprite model."
+heavy = true
+form = "replay-train"
+command = ["{python}", "-m", "changeling14_vision", "--run-dir", "{run_dir}", "replays", "train", "{replay_model}",
+           "--from", "{start_model}", "--dataset", "{replay_dataset}", "--models", "{models}"]

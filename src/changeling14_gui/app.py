@@ -16,13 +16,19 @@ from tkinter import messagebox, ttk
 
 from . import cards, sysinfo
 from .config import Config, JobSpec
-from .forms import FORMS
+from .forms import FORMS as SPRITE_FORMS
+from .forms import MOD, MUTED
+from .overlay_page import OverlayPage
+from .replay_forms import REPLAY_FORMS
 from .runfolder import Checkpoint, RunFolder, list_runs
 from .runner import Runner
+from .widgets import ScrollFrame
 
 FAST_TICK_MS = 1000   # a job is running or queued
 SLOW_TICK_MS = 4000   # nothing happening
 FOOTER_EVERY_S = 5.0
+# Sidebar sections, in this order; a job's group comes from jobs.toml, other groups go after these.
+GROUPS = ("Data", "Train", "Evaluate and export", "Tools")
 STATE_MARK = {"running": "▶", "queued": "…", "done": "✓", "failed": "✗", "stopped": "■",
               "cancelled": "–", "lost": "?"}
 
@@ -40,12 +46,27 @@ def format_duration(seconds: float | None) -> str:
     return f"{s} s"
 
 
-def open_in_file_browser(path: Path) -> None:
+def open_in_file_browser(path: Path) -> str | None:
+    """Opens path in Finder (or the system's file browser); returns an error message if it can't."""
     opener = "open" if sys.platform == "darwin" else "explorer" if sys.platform == "win32" else "xdg-open"
+    if not path.exists():
+        return f"{path} doesn't exist (yet)."
     try:
         subprocess.Popen([opener, str(path)])
-    except OSError:
-        pass
+    except OSError as exc:
+        return f"Could not open {path}: {exc}"
+    return None
+
+
+def job_groups(jobs) -> list[tuple[str, list]]:
+    """Jobs by sidebar section: GROUPS first, in that order, then any other group in config order."""
+    order = list(GROUPS)
+    for job in jobs:
+        name = job.group or "Other"
+        if name not in order:
+            order.append(name)
+    by = {g: [j for j in jobs if (j.group or "Other") == g] for g in order}
+    return [(g, by[g]) for g in order if by[g]]
 
 
 class WatchSetView(ttk.Frame):
@@ -226,7 +247,7 @@ class WatchSetView(ttk.Frame):
         names = row.get("names") or []
         if len(names) > 1:
             also = ", ".join(cards.display_name(n) for n in names[1:4]) + ("…" if len(names) > 4 else "")
-            ttk.Label(body, text=f"Also counts as right: {also}", foreground="#666",
+            ttk.Label(body, text=f"Also counts as right: {also}", foreground=MUTED,
                       wraplength=360).grid(row=2, column=0, columnspan=3, sticky="w")
         ttk.Label(body, text="The model's top guesses").grid(row=3, column=0, columnspan=3, sticky="w", pady=(10, 4))
         wanted = {n.lower() for n in names}
@@ -244,10 +265,13 @@ class WatchSetView(ttk.Frame):
         detail = [f"Kind: {row.get('group', '?')}", f"Sprite: {row.get('sheet', '?')} / {row.get('state', '?')}"]
         if guesses:
             detail.append("Match scores: " + ", ".join(f"{g.get('score', 0):.2f}" for g in guesses))
-        ttk.Label(body, text="\n".join(detail), foreground="#666", justify="left").grid(
+        ttk.Label(body, text="\n".join(detail), foreground=MUTED, justify="left").grid(
             row=10, column=0, columnspan=3, sticky="w", pady=(10, 0))
         ttk.Button(body, text="Close", command=top.destroy).grid(row=11, column=2, sticky="e", pady=(10, 0))
         top.bind("<Escape>", lambda _e: top.destroy())
+
+
+FORMS = {**SPRITE_FORMS, **REPLAY_FORMS}
 
 
 class App:
@@ -262,8 +286,8 @@ class App:
         self.last_footer = 0.0
 
         root.title("Changeling14 Training")
-        root.geometry("1100x720")
-        root.minsize(820, 520)
+        root.geometry("1100x760")
+        root.minsize(900, 560)
         root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self._build()
@@ -273,34 +297,55 @@ class App:
     # Layout --------------------------------------------------------------
 
     def _build(self) -> None:
-        outer = ttk.Frame(self.root, padding=8)
-        outer.pack(fill="both", expand=True)
+        book = self.book = ttk.Notebook(self.root)
+        book.pack(fill="both", expand=True)
+        outer = ttk.Frame(book, padding=8)
+        book.add(outer, text="Training")
+        # The overlay tab scrolls when the window is too short for it.
+        self.overlay_tab = ScrollFrame(book)
+        self.overlay_page = OverlayPage(self.overlay_tab.inner, self.cfg)
+        self.overlay_page.pack(fill="both", expand=True)
+        book.add(self.overlay_tab, text="Live overlay")
         outer.columnconfigure(1, weight=1)
         outer.rowconfigure(0, weight=1)
 
         side = ttk.Frame(outer)
         side.grid(row=0, column=0, sticky="ns", padx=(0, 8))
+        side.rowconfigure(0, weight=1)
+        side.columnconfigure(0, weight=1)
+        # The job sections scroll when the window is short; the hint and the queue below them always show.
+        jobs_scroll = ScrollFrame(side)
+        jobs_scroll.grid(row=0, column=0, sticky="nsew")
+        jobs_area = jobs_scroll.inner
 
-        jobs = ttk.LabelFrame(side, text="Jobs", padding=6)
-        jobs.pack(fill="x")
-        self.hint = ttk.Label(side, text="", wraplength=230, foreground="#666")
-        for job in self.cfg.jobs:
-            btn = ttk.Button(jobs, text=job.label, command=lambda j=job: self.start_job(j))
-            btn.pack(fill="x", pady=2)
-            if not job.enabled:
-                btn.state(["disabled"])
-            hint = job.description + ("" if job.enabled else " (not available yet)")
-            btn.bind("<Enter>", lambda _e, h=hint: self.hint.configure(text=h))
-            btn.bind("<Leave>", lambda _e: self.hint.configure(text=""))
-        ttk.Button(jobs, text="Open replay inbox", command=self.open_inbox).pack(fill="x", pady=(8, 2))
-        self.hint.pack(fill="x", pady=4)
+        # Job buttons by section; heavy jobs queue behind a running one rather than being greyed out.
+        self.hint = ttk.Label(side, text="Point at a button to see what it does. Heavy jobs queue and run one "
+                                         "at a time.", wraplength=230, foreground=MUTED)
+        for group, jobs_in in job_groups(self.cfg.jobs):
+            box = ttk.LabelFrame(jobs_area, text=group, padding=(6, 2, 6, 6))
+            box.pack(fill="x", pady=(0, 4))
+            for job in jobs_in:
+                self._job_button(box, job.label, lambda j=job: self.start_job(j),
+                                 job.description + ("" if job.enabled else " (not available yet)"), job.enabled)
+            if group == "Evaluate and export":
+                self._job_button(box, "Open live overlay", lambda: self.book.select(self.overlay_tab),
+                                 f"Draw a replay model's boxes over the SS14 window ({MOD}-2).")
+        folders = ttk.LabelFrame(jobs_area, text="Folders", padding=(6, 2, 6, 6))
+        folders.pack(fill="x", pady=(0, 4))
+        for label, key, tip in (("Open replay inbox", "inbox", "Put downloaded replay .zip files here, then "
+                                                               "Import replays."),
+                                ("Open models folder", "models", "Every trained model."),
+                                ("Open runs folder", "runs", "One folder per job: its log, progress and results.")):
+            self._job_button(folders, label, lambda k=key: self.open_folder(k), tip)
+        self.hint.grid(row=1, column=0, sticky="ew", pady=4)
 
         queue = ttk.LabelFrame(side, text="Running and queued", padding=6)
-        queue.pack(fill="both", expand=True, pady=(4, 0))
-        self.queue_list = tk.Listbox(queue, height=8, width=32, activestyle="none")
+        queue.grid(row=2, column=0, sticky="ew", pady=(4, 0))
+        self.queue_list = tk.Listbox(queue, height=5, width=32, activestyle="none")
         self.queue_list.pack(fill="both", expand=True)
         self.queue_list.bind("<<ListboxSelect>>", self.on_queue_select)
-        ttk.Button(queue, text="Stop / remove", command=self.stop_selected).pack(fill="x", pady=(6, 0))
+        self._job_button(queue, "Stop or remove job", self.stop_selected,
+                         "Stops the selected running job (it gets a few seconds to save) or removes a queued one.")
         self.queue_runs = []
 
         main = ttk.Frame(outer)
@@ -315,7 +360,7 @@ class App:
         self.run_box = ttk.Combobox(top, textvariable=self.run_var, state="readonly", width=48)
         self.run_box.pack(side="left", padx=6)
         self.run_box.bind("<<ComboboxSelected>>", self.on_run_select)
-        ttk.Button(top, text="Open folder", command=self.open_run_folder).pack(side="left")
+        ttk.Button(top, text="Open run folder", command=self.open_run_folder).pack(side="left")
         self.state_label = ttk.Label(top, text="")
         self.state_label.pack(side="left", padx=10)
 
@@ -342,8 +387,22 @@ class App:
         self.log.pack(fill="both", expand=True)
         tabs.add(log_frame, text="Log")
 
-        self.footer = ttk.Label(self.root, text="", padding=(8, 2, 8, 6), foreground="#555")
-        self.footer.pack(fill="x", side="bottom")
+        self.footer = ttk.Label(self.root, text="", padding=(8, 2, 8, 6), foreground=MUTED)
+        self.footer.pack(fill="x", side="bottom", before=book)
+        # Cmd-1 / Cmd-2 (Ctrl elsewhere): the two tabs.
+        self.root.bind(f"<{MOD}-Key-1>", lambda _e: book.select(0))
+        self.root.bind(f"<{MOD}-Key-2>", lambda _e: book.select(self.overlay_tab))
+
+    def _job_button(self, parent, text: str, command, hint: str, enabled: bool = True) -> ttk.Button:
+        """A sidebar button: full width, its description in the hint line while pointed at."""
+        btn = ttk.Button(parent, text=text, command=command)
+        btn.pack(fill="x", pady=(4, 0))
+        if not enabled:
+            btn.state(["disabled"])
+        default = self.hint.cget("text")
+        btn.bind("<Enter>", lambda _e: self.hint.configure(text=hint))
+        btn.bind("<Leave>", lambda _e: self.hint.configure(text=default))
+        return btn
 
     # Actions -------------------------------------------------------------
 
@@ -392,13 +451,21 @@ class App:
         self.runner.stop(run)
         self.refresh_queue()
 
-    def open_inbox(self) -> None:
-        self.cfg.inbox.mkdir(parents=True, exist_ok=True)
-        open_in_file_browser(self.cfg.inbox)
+    def open_folder(self, key: str) -> None:
+        path = {"inbox": self.cfg.inbox, "runs": self.cfg.runs}.get(key) or self.cfg.paths.get(key)
+        if path is None:
+            return
+        if key == "inbox":
+            path.mkdir(parents=True, exist_ok=True)
+        problem = open_in_file_browser(path)
+        if problem:
+            messagebox.showinfo("Open folder", problem, parent=self.root)
 
     def open_run_folder(self) -> None:
         if self.selected:
-            open_in_file_browser(self.selected.path)
+            problem = open_in_file_browser(self.selected.path)
+            if problem:
+                messagebox.showinfo("Open run folder", problem, parent=self.root)
 
     def on_queue_select(self, _event=None) -> None:
         sel = self.queue_list.curselection()
@@ -433,6 +500,7 @@ class App:
                 self.runner.stop(run)
             if answer:
                 self.runner.stop_all()
+        self.overlay_page.stop()
         self.root.destroy()
 
     # Refresh -------------------------------------------------------------
@@ -487,7 +555,11 @@ class App:
             self.state_label.configure(text=f"No runs yet in {self.cfg.runs}")
             return
         state = run.state()
-        self.state_label.configure(text=f"{STATE_MARK.get(state, '')} {state}")
+        reason = run.failure_reason() if state == "failed" else ""
+        if len(reason) > 140:
+            reason = reason[:139] + "…"
+        self.state_label.configure(text=f"{STATE_MARK.get(state, '')} {state}" + (f": {reason}" if reason else ""),
+                                   foreground="#b00020" if reason else "")
         status = run.status()
         if state == "running":
             self.eta_label.configure(text=f"About {format_duration(run.eta_seconds())} left")
