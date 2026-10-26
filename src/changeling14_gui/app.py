@@ -22,6 +22,7 @@ from .overlay_page import OverlayPage
 from .replay_forms import REPLAY_FORMS
 from .runfolder import Checkpoint, RunFolder, list_runs
 from .runner import Runner
+from .widgets import ScrollFrame
 
 FAST_TICK_MS = 1000   # a job is running or queued
 SLOW_TICK_MS = 4000   # nothing happening
@@ -286,7 +287,7 @@ class App:
 
         root.title("Changeling14 Training")
         root.geometry("1100x760")
-        root.minsize(900, 640)
+        root.minsize(900, 560)
         root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self._build()
@@ -300,37 +301,46 @@ class App:
         book.pack(fill="both", expand=True)
         outer = ttk.Frame(book, padding=8)
         book.add(outer, text="Training")
-        self.overlay_page = OverlayPage(book, self.cfg)
-        book.add(self.overlay_page, text="Live overlay")
+        # The overlay tab scrolls when the window is too short for it.
+        self.overlay_tab = ScrollFrame(book)
+        self.overlay_page = OverlayPage(self.overlay_tab.inner, self.cfg)
+        self.overlay_page.pack(fill="both", expand=True)
+        book.add(self.overlay_tab, text="Live overlay")
         outer.columnconfigure(1, weight=1)
         outer.rowconfigure(0, weight=1)
 
         side = ttk.Frame(outer)
         side.grid(row=0, column=0, sticky="ns", padx=(0, 8))
+        side.rowconfigure(0, weight=1)
+        side.columnconfigure(0, weight=1)
+        # The job sections scroll when the window is short; the hint and the queue below them always show.
+        jobs_scroll = ScrollFrame(side)
+        jobs_scroll.grid(row=0, column=0, sticky="nsew")
+        jobs_area = jobs_scroll.inner
 
         # Job buttons by section; heavy jobs queue behind a running one rather than being greyed out.
         self.hint = ttk.Label(side, text="Point at a button to see what it does. Heavy jobs queue and run one "
                                          "at a time.", wraplength=230, foreground=MUTED)
         for group, jobs_in in job_groups(self.cfg.jobs):
-            box = ttk.LabelFrame(side, text=group, padding=(6, 2, 6, 6))
+            box = ttk.LabelFrame(jobs_area, text=group, padding=(6, 2, 6, 6))
             box.pack(fill="x", pady=(0, 4))
             for job in jobs_in:
                 self._job_button(box, job.label, lambda j=job: self.start_job(j),
                                  job.description + ("" if job.enabled else " (not available yet)"), job.enabled)
             if group == "Evaluate and export":
-                self._job_button(box, "Open live overlay", lambda: self.book.select(self.overlay_page),
+                self._job_button(box, "Open live overlay", lambda: self.book.select(self.overlay_tab),
                                  f"Draw a replay model's boxes over the SS14 window ({MOD}-2).")
-        folders = ttk.LabelFrame(side, text="Folders", padding=(6, 2, 6, 6))
+        folders = ttk.LabelFrame(jobs_area, text="Folders", padding=(6, 2, 6, 6))
         folders.pack(fill="x", pady=(0, 4))
         for label, key, tip in (("Open replay inbox", "inbox", "Put downloaded replay .zip files here, then "
                                                                "Import replays."),
                                 ("Open models folder", "models", "Every trained model."),
                                 ("Open runs folder", "runs", "One folder per job: its log, progress and results.")):
             self._job_button(folders, label, lambda k=key: self.open_folder(k), tip)
-        self.hint.pack(fill="x", pady=4)
+        self.hint.grid(row=1, column=0, sticky="ew", pady=4)
 
         queue = ttk.LabelFrame(side, text="Running and queued", padding=6)
-        queue.pack(fill="both", expand=True, pady=(4, 0))
+        queue.grid(row=2, column=0, sticky="ew", pady=(4, 0))
         self.queue_list = tk.Listbox(queue, height=5, width=32, activestyle="none")
         self.queue_list.pack(fill="both", expand=True)
         self.queue_list.bind("<<ListboxSelect>>", self.on_queue_select)
@@ -381,7 +391,7 @@ class App:
         self.footer.pack(fill="x", side="bottom", before=book)
         # Cmd-1 / Cmd-2 (Ctrl elsewhere): the two tabs.
         self.root.bind(f"<{MOD}-Key-1>", lambda _e: book.select(0))
-        self.root.bind(f"<{MOD}-Key-2>", lambda _e: book.select(self.overlay_page))
+        self.root.bind(f"<{MOD}-Key-2>", lambda _e: book.select(self.overlay_tab))
 
     def _job_button(self, parent, text: str, command, hint: str, enabled: bool = True) -> ttk.Button:
         """A sidebar button: full width, its description in the hint line while pointed at."""

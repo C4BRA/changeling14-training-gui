@@ -563,3 +563,44 @@ def test_sidebar_groups_and_missing_library_files(tmp_path):
     cfg2 = config.parse({"paths": {"replay_library": str(lib), "replay_recordings": str(tmp_path / "rec")}})
     assert [r.file for r in replays.library_replays(cfg2)] == ["b/here.zip"]
     assert replays.missing_library_files(cfg2) == 1
+
+
+def test_every_section_reachable_in_a_short_window():
+    """The sidebar's job sections scroll; the queue and its Stop button stay on screen at any height;
+    the overlay tab and the job windows scroll instead of being cut off."""
+    tk = pytest.importorskip("tkinter")
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("no display")
+    root.withdraw()
+    _orig = tk.Toplevel.__init__
+
+    def hidden(self, *a, **k):
+        _orig(self, *a, **k)
+        self.withdraw()
+    tk.Toplevel.__init__ = hidden
+    try:
+        from changeling14_gui import app as A
+        cfg = config.parse(__import__("tomllib").loads(
+            (Path(__file__).parent.parent / "src/changeling14_gui/jobs.toml").read_text()))
+        a = A.App(root, cfg)
+        for height in (560, 700, 900):
+            root.geometry(f"900x{height}")
+            root.update()
+            queue = a.queue_list.master
+            bottom = queue.winfo_rooty() - root.winfo_rooty() + queue.winfo_height()
+            assert queue.winfo_height() > 60 and bottom <= height, (height, bottom)
+        a.book.select(a.overlay_tab)
+        root.geometry("900x560")
+        root.update()
+        assert a.overlay_tab.needs_scroll()                    # too short: it scrolls rather than cuts off
+        region = [float(v) for v in a.overlay_tab.canvas.cget("scrollregion").split()]
+        assert region[3] >= a.overlay_page.winfo_reqheight()
+        w = A.FORMS["train"](root, cfg, cfg.job("train"), set())
+        w.fit_to_screen()
+        assert w.top.winfo_height() <= max(300, w.top.winfo_screenheight() - 160)
+        w.top.destroy()
+    finally:
+        tk.Toplevel.__init__ = _orig
+        root.destroy()

@@ -16,6 +16,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from . import codebases
 from .config import Config, JobSpec
+from .widgets import ScrollFrame
 from .library import (SIZES, Catalogue, Library, Model, checkpoint_step, find_catalogue_root,
                       find_model_root, is_catalogue, is_model)
 
@@ -271,7 +272,10 @@ class _Window:
         top.transient(parent)
         top.protocol("WM_DELETE_WINDOW", self.cancel)
         top.bind("<Escape>", lambda _e: self.cancel())
-        self.body = ttk.Frame(top, padding=12)
+        # The window scrolls if the screen is too short for it (see wait()).
+        self.scroll = ScrollFrame(top)
+        self.scroll.pack(fill="both", expand=True)
+        self.body = ttk.Frame(self.scroll.inner, padding=12)
         self.body.pack(fill="both", expand=True)
         self.body.columnconfigure(0, weight=1)
         # Remembered folders that were deleted or moved are dropped from the lists on open.
@@ -350,7 +354,17 @@ class _Window:
         if callable(refresh):
             refresh()
 
+    def fit_to_screen(self) -> None:
+        """As big as the content asks, but never taller than the screen's
+        usable height (menu bar and Dock left free); the rest scrolls."""
+        top = self.top
+        top.update_idletasks()
+        want_w, want_h = self.scroll.inner.winfo_reqwidth(), self.scroll.inner.winfo_reqheight()
+        room = max(300, top.winfo_screenheight() - 160)
+        top.geometry(f"{want_w}x{min(want_h, room)}")
+
     def wait(self) -> FormResult | None:
+        self.fit_to_screen()
         self.top.grab_set()
         self.top.focus_set()
         self.top.wait_window()
